@@ -2,54 +2,52 @@ require "../src/sync-map"
 require "../src/sync-map/hash_trie_map"
 require "../src/sync-map/xmap"
 
-KEYS = (0...10_000).to_a
+MAX   = 1_000
+I_KEYS = (0...MAX).to_a
+S_KEYS = I_KEYS.map(&.to_s)
 
-MAPS = {
-  "Sync::Map"         => ->{ Sync::Map(Int32, Int32).new },
-  "Sync::HashTrieMap" => ->{ Sync::HashTrieMap(Int32, Int32).new },
-  "Sync::XMap"        => ->{ Sync::XMap(Int32, Int32).new },
-}
-
-def bench(name, factory, size, read_pct, iters)
-  map = factory.call
-  size.times { |i| map.store(KEYS[i], i) }
-  rng = Random.new(42)
-
-  t = Time.measure do
-    if read_pct == 100
-      iters.times { |i| map.load(KEYS[i % size]) }
-    else
-      iters.times do
-        r = rng.rand(1000)
-        k = KEYS[rng.rand(size)]
-        if r < read_pct * 10
-          map.load(k)
-        elsif r < read_pct * 10 + (1000 - read_pct * 10) // 2
-          map.store(k, 1)
-        else
-          map.delete(k)
-        end
-      end
-    end
+def bench(label, map, keys, sizes)
+  puts label
+  sizes.each do |size|
+    iters = size * 100
+    t = Time.measure { iters.times { |i| map.load(keys[i % size]) } }
+    ops = (iters / t.total_seconds).to_i
+    puts "  size=#{size}: #{ops} ops/s"
   end
-
-  ops = iters / t.total_seconds
-  puts "  #{name.ljust(20)} #{ops.to_i.to_s.reverse.gsub(/(\d{3})(?=\d)/,"\\1_").reverse.rjust(12)} ops/s"
 end
 
-puts "Concurrent Map Benchmarks — Int Keys"
-puts "=" * 50
-
-[100, 1_000, 5_000].each do |size|
-  iters = size * 50
-  puts "\n100% reads, size=#{size} iters=#{iters}:"
-  MAPS.each { |n, f| bench(n, f, size, 100, iters) }
+# Pre-fill helpers (named for reporting)
+def prefill(label, factory, keys, n)
+  map = factory.call
+  t = Time.measure { n.times { |i| map.store(keys[i], i) } }
+  puts "  #{label}: #{(n / t.total_seconds).to_i} stores/s"
+  map
 end
 
-[100, 1_000].each do |size|
-  iters = size * 20
-  puts "\n90% reads, size=#{size} iters=#{iters}:"
-  MAPS.each { |n, f| bench(n, f, size, 90, iters) }
-end
+puts "=" * 56
+puts "100% Reads (single-threaded, --release, pre-fill=#{MAX})"
+puts "=" * 56
+
+SIZES = [100, 500, 1_000]
+
+puts "\n--- Int Keys ---"
+sm = prefill("Sync::Map       ", ->{ Sync::Map(Int32, Int32).new }, I_KEYS, MAX)
+ht = prefill("Sync::HashTrieMap", ->{ Sync::HashTrieMap(Int32, Int32).new }, I_KEYS, MAX)
+xm = prefill("Sync::XMap      ", ->{ Sync::XMap(Int32, Int32).new }, I_KEYS, MAX)
+
+puts "\nRead throughput:"
+bench("  Sync::Map       ", sm, I_KEYS, SIZES)
+bench("  Sync::HashTrieMap", ht, I_KEYS, SIZES)
+bench("  Sync::XMap       ", xm, I_KEYS, SIZES)
+
+puts "\n--- String Keys ---"
+sms = prefill("Sync::Map       ", ->{ Sync::Map(String, Int32).new }, S_KEYS, MAX)
+hts = prefill("Sync::HashTrieMap", ->{ Sync::HashTrieMap(String, Int32).new }, S_KEYS, MAX)
+xms = prefill("Sync::XMap      ", ->{ Sync::XMap(String, Int32).new }, S_KEYS, MAX)
+
+puts "\nRead throughput:"
+bench("  Sync::Map       ", sms, S_KEYS, SIZES)
+bench("  Sync::HashTrieMap", hts, S_KEYS, SIZES)
+bench("  Sync::XMap       ", xms, S_KEYS, SIZES)
 
 puts "\nDone."
