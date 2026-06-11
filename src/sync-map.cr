@@ -1,9 +1,13 @@
-require "mutex"
+require "sync/mutex"
 
 # A thread-safe map (Hash) that is safe for concurrent use
 # by multiple fibers without additional locking or coordination.
 #
 # The API mirrors Go's `sync.Map` with Crystal-idiomatic aliases.
+#
+# Uses Sync::Mutex(:unchecked) — a fast nsync-style mutex (cosmopolitan/nsync
+# adaptation) with no deadlock detection overhead. Safe because Sync::Map
+# never locks recursively and always properly pairs lock/unlock.
 #
 # Upstream sources:
 # - Go stdlib sync.Map: vendor/go/src/sync/map.go (Go 1.24+, HashTrieMap-backed)
@@ -19,7 +23,7 @@ class Sync::Map(K, V)
   end
 
   @hash = Hash(K, V).new
-  @mu = ::Mutex.new
+  @mu = Sync::Mutex.new(:unchecked)
 
   def initialize
   end
