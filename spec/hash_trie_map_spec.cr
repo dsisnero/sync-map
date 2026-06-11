@@ -92,4 +92,36 @@ describe Sync::HashTrieMap do
     100.times { |i| m.store(i, i * 10) }
     100.times { |i| v, _ = m.load(i); v.should eq(i * 10) }
   end
+
+  it "trie grows beyond single leaf" do
+    m = Sync::HashTrieMap(Int32, Int32).new
+    500.times { |i| m.store(i, i) }
+    500.times { |i| v, _ = m.load(i); v.should eq(i) }
+    m.size.should eq(500)
+  end
+
+  it "trie handles deletes after growth" do
+    m = Sync::HashTrieMap(Int32, Int32).new
+    200.times { |i| m.store(i, i) }
+    50.times { |i| m.delete(i * 2) }
+    200.times { |i|
+      v, ok = m.load(i)
+      if i.even? && i < 100
+        ok.should be_false
+      else
+        ok.should be_true
+        v.should eq(i)
+      end
+    }
+  end
+
+  it "trie handles swaps after growth" do
+    m = Sync::HashTrieMap(Int32, Int32).new
+    200.times { |i| m.store(i, i) }
+    old, loaded = m.swap(50, 999)
+    loaded.should be_true
+    old.should eq(50)
+    v, _ = m.load(50)
+    v.should eq(999)
+  end
 end
