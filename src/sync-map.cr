@@ -133,16 +133,6 @@ class Sync::Map(K, V)
     end
   end
 
-  # Calls the block for each key and value present in the map.
-  # If the block returns a falsey value, the iteration stops.
-  def each(& : K, V -> _) : Nil
-    @mu.synchronize do
-      @hash.each do |key, value|
-        break unless yield(key, value)
-      end
-    end
-  end
-
   # Returns the number of entries in the map.
   def size : Int32
     @mu.synchronize { @hash.size }
@@ -395,14 +385,14 @@ class Sync::Map(K, V)
   def delete_matching(& : K, V -> {Bool, Bool}) : Int32
     total = 0
     @mu.synchronize do
+      to_delete = [] of K
       @hash.each do |key, value|
         del, stop = yield(key, value)
-        if del
-          @hash.delete(key)
-          total += 1
-        end
+        to_delete << key if del
+        total += 1 if del
         break if stop
       end
+      to_delete.each { |k| @hash.delete(k) }
     end
     total
   end
@@ -437,15 +427,6 @@ class Sync::Map(K, V)
   # --- More Crystal Hash parity ---
 
   # Iterates all keys.
-  def each_key(& : K -> _) : Nil
-    @mu.synchronize { @hash.each_key { |k| yield k } }
-  end
-
-  # Iterates all values.
-  def each_value(& : V -> _) : Nil
-    @mu.synchronize { @hash.each_value { |v| yield v } }
-  end
-
   # Removes entries for which the block returns false.
   def select!(& : K, V -> _) : self
     @mu.synchronize { @hash.select! { |k, v| yield(k, v) } }
@@ -650,5 +631,62 @@ class Sync::Map(K, V)
   # Unsafe fetch (no locking) for internal use during locked operations.
   protected def unsafe_fetch(key : K) : V
     @hash[key]
+  end
+
+  # --- Stats ---
+
+  # Statistics for diagnostic purposes.
+  struct Stats
+    getter size : Int32
+    getter capacity : Int32
+
+    def initialize(@size : Int32, @capacity : Int32)
+    end
+  end
+
+  # Returns statistics about the map. O(N) operation, for diagnostics only.
+  def stats : Stats
+    @mu.synchronize do
+      Stats.new(@hash.size, @hash.size) # capacity = size for simple hash
+    end
+  end
+
+  # --- Block-less iterators ---
+
+  # Returns a snapshot of all entries as an Array, then yields each.
+  # Returns an Iterator({K, V}) when called without a block.
+  def each(& : K, V -> _) : Nil
+    snapshot = @mu.synchronize { @hash.to_a }
+    snapshot.each do |key, value|
+      break unless yield(key, value)
+    end
+  end
+
+  # Without block, returns a snapshot iterator.
+  def each : Iterator({K, V})
+    entries = @mu.synchronize { @hash.to_a }
+    entries.each
+  end
+
+  # Iterates all keys.
+  def each_key(& : K -> _) : Nil
+    @mu.synchronize { @hash.each_key { |k| yield k } }
+  end
+
+  # Without block, returns an iterator over snapshot keys.
+  def each_key : Iterator(K)
+    keys = @mu.synchronize { @hash.keys }
+    keys.each
+  end
+
+  # Iterates all values.
+  def each_value(& : V -> _) : Nil
+    @mu.synchronize { @hash.each_value { |v| yield v } }
+  end
+
+  # Without block, returns an iterator over snapshot values.
+  def each_value : Iterator(V)
+    vals = @mu.synchronize { @hash.values }
+    vals.each
   end
 end

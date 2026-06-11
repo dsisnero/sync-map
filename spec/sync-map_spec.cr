@@ -643,6 +643,64 @@ describe Sync::Map do
       end
       10.times { done.receive }
     end
+
+    it "each is safe with concurrent modifications" do
+      m = Sync::Map(Int32, Int32).new
+      (1..1000).each { |i| m.store(i, i) }
+      done = Channel(Nil).new
+
+      spawn do
+        m.each { |_k, _v| Fiber.yield }
+        done.send(nil)
+      end
+      5.times do
+        spawn do
+          100.times { |i| m.store(i, i * 2) }
+          done.send(nil)
+        end
+      end
+      6.times { done.receive }
+    end
+
+    it "delete_matching is safe with concurrent stores" do
+      m = Sync::Map(Int32, Int32).new
+      (1..500).each { |i| m.store(i, i) }
+      done = Channel(Nil).new
+
+      spawn do
+        m.delete_matching { |k, _v| k.even? ? {true, false} : {false, false} }
+        done.send(nil)
+      end
+      5.times do
+        spawn do
+          100.times { |i| m.store(1000 + i, i) }
+          done.send(nil)
+        end
+      end
+      6.times { done.receive }
+    end
+
+    it "each_key/each_value iterate correctly under contention" do
+      m = Sync::Map(Int32, Int32).new
+      (1..100).each { |i| m.store(i, i) }
+      done = Channel(Nil).new
+      keys_ch = Channel(Array(Int32)).new
+
+      spawn do
+        keys = [] of Int32
+        m.each_key { |k| keys << k }
+        keys_ch.send(keys)
+        done.send(nil)
+      end
+      spawn do
+        50.times { m.delete(rand(1..100)) }
+        50.times { m.store(rand(200..300), 42) }
+        done.send(nil)
+      end
+      keys = keys_ch.receive
+      done.receive
+      keys.size.should be >= 50
+    end
   end
 
   # --- Cycle 3: More Crystal Hash parity ---
@@ -912,6 +970,50 @@ describe Sync::Map do
       h = m.to_h
       h.should be_a(Hash(String, Int32))
       h["a"].should eq(1)
+    end
+  end
+
+  # --- Cycle 6: Stats + block-less iterators ---
+
+  describe "#stats" do
+    it "returns statistics about the map" do
+      m = Sync::Map(String, Int32).new
+      m.store("a", 1)
+      m.store("b", 2)
+      m.store("c", 3)
+      stats = m.stats
+      stats.size.should eq(3)
+    end
+
+    it "stats on empty map" do
+      m = Sync::Map(String, Int32).new
+      stats = m.stats
+      stats.size.should eq(0)
+    end
+  end
+
+  describe "block-less each returns Iterator" do
+    it "each returns an iterator" do
+      m = Sync::Map(String, Int32).new
+      m.store("a", 1)
+      m.store("b", 2)
+      iter = m.each
+      entries = iter.to_a
+      entries.size.should eq(2)
+    end
+
+    it "each_key returns an iterator" do
+      m = Sync::Map(String, Int32).new
+      m.store("x", 1)
+      iter = m.each_key
+      iter.to_a.sort.should eq(["x"])
+    end
+
+    it "each_value returns an iterator" do
+      m = Sync::Map(String, Int32).new
+      m.store("x", 1)
+      iter = m.each_value
+      iter.to_a.should eq([1])
     end
   end
 end
