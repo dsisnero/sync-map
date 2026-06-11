@@ -766,4 +766,152 @@ describe Sync::Map do
       arr.should be_a(Array({String, Int32}))
     end
   end
+
+  # --- Cycle 5: Remaining Crystal Hash parity ---
+
+  describe "#select with keys" do
+    it "returns new map with only given keys" do
+      m = Sync::Map(String, Int32).new
+      m.store("a", 1)
+      m.store("b", 2)
+      m.store("c", 3)
+      result = m.select(["a", "c"])
+      result.size.should eq(2)
+      result.has_key?("a").should be_true
+      result.has_key?("b").should be_false
+      result.has_key?("c").should be_true
+    end
+
+    it "accepts varargs keys" do
+      m = Sync::Map(String, Int32).new
+      m.store("a", 1)
+      m.store("b", 2)
+      result = m.select("a")
+      result.size.should eq(1)
+    end
+  end
+
+  describe "#reject with keys" do
+    it "returns new map without given keys" do
+      m = Sync::Map(String, Int32).new
+      m.store("a", 1)
+      m.store("b", 2)
+      m.store("c", 3)
+      result = m.reject(["a", "c"])
+      result.size.should eq(1)
+      result.has_key?("b").should be_true
+    end
+  end
+
+  describe "#merge with block" do
+    it "resolves conflicts via block" do
+      m = Sync::Map(String, Int32).new
+      m.store("a", 1)
+      m.store("b", 2)
+      result = m.merge({"b" => 20, "c" => 30}) { |_k, v1, v2| v1 + v2 }
+      v, _ = result.load("b")
+      v.should eq(22)
+    end
+  end
+
+  describe "#merge! with block" do
+    it "resolves conflicts in place via block" do
+      m = Sync::Map(String, Int32).new
+      m.store("a", 1)
+      m.store("b", 2)
+      m.merge!({"b" => 20, "c" => 30}) { |_k, v1, v2| v1 * v2 }
+      v, _ = m.load("b")
+      v.should eq(40)
+      m.size.should eq(3)
+    end
+
+    it "works without block" do
+      m = Sync::Map(String, Int32).new
+      m.merge!({"a" => 1})
+      m.size.should eq(1)
+    end
+  end
+
+  describe "#transform_keys!" do
+    it "transforms keys in place" do
+      m = Sync::Map(String, Int32).new
+      m.store("hello", 1)
+      m.store("world", 2)
+      m.transform_keys! { |k, _v| k.upcase }
+      m.has_key?("HELLO").should be_true
+      m.has_key?("hello").should be_false
+    end
+  end
+
+  describe "#transform_values!" do
+    it "transforms values in place" do
+      m = Sync::Map(String, Int32).new
+      m.store("a", 1)
+      m.store("b", 2)
+      m.transform_values! { |v, _k| v * 10 }
+      v, _ = m.load("a")
+      v.should eq(10)
+    end
+  end
+
+  describe "#invert" do
+    it "swaps keys and values" do
+      m = Sync::Map(String, Int32).new
+      m.store("a", 1)
+      m.store("b", 2)
+      result = m.invert
+      result.size.should eq(2)
+      v, _ = result.load(1)
+      v.should eq("a")
+    end
+
+    it "raises on duplicate values" do
+      m = Sync::Map(String, Int32).new
+      m.store("a", 1)
+      m.store("b", 1)
+      expect_raises(KeyError) { m.invert }
+    end
+  end
+
+  describe "#values_at" do
+    it "returns tuple of values for given keys" do
+      m = Sync::Map(String, Int32).new
+      m.store("a", 1)
+      m.store("b", 2)
+      m.store("c", 3)
+      result = m.values_at("a", "c")
+      result.should eq([1, 3])
+    end
+
+    it "raises on missing key" do
+      m = Sync::Map(String, Int32).new
+      m.store("a", 1)
+      expect_raises(KeyError) { m.values_at("b") }
+    end
+  end
+
+  describe "#clone" do
+    it "creates a deep copy (values cloned too)" do
+      m = Sync::Map(String, String).new
+      m.store("foo", "bar")
+      copy = m.clone
+      copy.size.should eq(1)
+      v, _ = copy.load("foo")
+      v.should eq("bar")
+      # Modifying copy does not affect original
+      copy.store("foo", "baz")
+      orig_v, _ = m.load("foo")
+      orig_v.should eq("bar")
+    end
+  end
+
+  describe "#to_h" do
+    it "returns underlying hash representation" do
+      m = Sync::Map(String, Int32).new
+      m.store("a", 1)
+      h = m.to_h
+      h.should be_a(Hash(String, Int32))
+      h["a"].should eq(1)
+    end
+  end
 end
