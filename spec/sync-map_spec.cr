@@ -644,4 +644,126 @@ describe Sync::Map do
       10.times { done.receive }
     end
   end
+
+  # --- Cycle 3: More Crystal Hash parity ---
+
+  describe "#each_key and #each_value" do
+    it "iterates all keys" do
+      m = Sync::Map(String, Int32).new
+      m.store("a", 1)
+      m.store("b", 2)
+      keys = [] of String
+      m.each_key { |k| keys << k }
+      keys.sort.should eq(["a", "b"])
+    end
+
+    it "iterates all values" do
+      m = Sync::Map(String, Int32).new
+      m.store("a", 1)
+      m.store("b", 2)
+      values = [] of Int32
+      m.each_value { |v| values << v }
+      values.sort.should eq([1, 2])
+    end
+  end
+
+  describe "#select!" do
+    it "keeps matching entries in place" do
+      m = Sync::Map(String, Int32).new
+      m.store("a", 1)
+      m.store("b", 2)
+      m.store("c", 3)
+      m.select! { |_k, v| v > 1 }
+      m.size.should eq(2)
+      m.has_key?("a").should be_false
+      m.has_key?("b").should be_true
+    end
+  end
+
+  describe "#reject!" do
+    it "removes matching entries in place" do
+      m = Sync::Map(String, Int32).new
+      m.store("a", 1)
+      m.store("b", 2)
+      m.store("c", 3)
+      m.reject! { |_k, v| v > 1 }
+      m.size.should eq(1)
+      m.has_key?("a").should be_true
+    end
+  end
+
+  describe "#transform_keys" do
+    it "returns new map with transformed keys" do
+      m = Sync::Map(String, Int32).new
+      m.store("hello", 1)
+      m.store("world", 2)
+      result = m.transform_keys { |k, _v| k.upcase }
+      result.has_key?("HELLO").should be_true
+      result.has_key?("WORLD").should be_true
+      result.size.should eq(2)
+    end
+  end
+
+  describe "#transform_values" do
+    it "returns new map with transformed values" do
+      m = Sync::Map(String, Int32).new
+      m.store("a", 1)
+      m.store("b", 2)
+      result = m.transform_values { |v, _k| v * 10 }
+      v, _ = result.load("a")
+      v.should eq(10)
+    end
+  end
+
+  describe "#merge" do
+    it "returns new map with merged entries" do
+      m = Sync::Map(String, Int32).new
+      m.store("a", 1)
+      result = m.merge({"b" => 2, "c" => 3})
+      result.size.should eq(3)
+      v, _ = result.load("a")
+      v.should eq(1)
+    end
+
+    it "does not mutate original" do
+      m = Sync::Map(String, Int32).new
+      m.store("a", 1)
+      m.merge({"b" => 2})
+      m.size.should eq(1)
+    end
+  end
+
+  describe "#compact" do
+    it "returns new map without nil values" do
+      m = Sync::Map(String, Int32?).new
+      m.store("a", 1)
+      m.store("b", nil)
+      m.store("c", 3)
+      result = m.compact
+      result.size.should eq(2)
+      result.has_key?("b").should be_false
+    end
+  end
+
+  describe "#compact!" do
+    it "removes nil values in place" do
+      m = Sync::Map(String, Int32?).new
+      m.store("a", 1)
+      m.store("b", nil)
+      m.compact!
+      m.size.should eq(1)
+      m.has_key?("b").should be_false
+    end
+  end
+
+  describe "#to_a" do
+    it "returns array of key-value tuples" do
+      m = Sync::Map(String, Int32).new
+      m.store("a", 1)
+      m.store("b", 2)
+      arr = m.to_a
+      arr.size.should eq(2)
+      arr.should be_a(Array({String, Int32}))
+    end
+  end
 end

@@ -423,4 +423,83 @@ class Sync::Map(K, V)
   protected def unsafe_store(key : K, value : V) : Nil
     @hash[key] = value
   end
+
+  # --- More Crystal Hash parity ---
+
+  # Iterates all keys.
+  def each_key(& : K -> _) : Nil
+    @mu.synchronize { @hash.each_key { |k| yield k } }
+  end
+
+  # Iterates all values.
+  def each_value(& : V -> _) : Nil
+    @mu.synchronize { @hash.each_value { |v| yield v } }
+  end
+
+  # Removes entries for which the block returns false.
+  def select!(& : K, V -> _) : self
+    @mu.synchronize { @hash.select! { |k, v| yield(k, v) } }
+    self
+  end
+
+  # Removes entries for which the block returns true.
+  def reject!(& : K, V -> _) : self
+    @mu.synchronize { @hash.reject! { |k, v| yield(k, v) } }
+    self
+  end
+
+  # Returns a new map with transformed keys.
+  def transform_keys(& : K, V -> K) : Sync::Map(K, V)
+    @mu.synchronize do
+      copy = Sync::Map(K, V).new
+      @hash.each do |k, v|
+        copy.unsafe_store(yield(k, v), v)
+      end
+      copy
+    end
+  end
+
+  # Returns a new map with transformed values.
+  def transform_values(& : V, K -> V) : Sync::Map(K, V)
+    @mu.synchronize do
+      copy = Sync::Map(K, V).new
+      @hash.each do |k, v|
+        copy.unsafe_store(k, yield(v, k))
+      end
+      copy
+    end
+  end
+
+  # Returns a new map containing entries from self and other.
+  # Entries from other overwrite self's entries for duplicate keys.
+  def merge(other : Hash(K, V)) : Sync::Map(K, V)
+    @mu.synchronize do
+      copy = Sync::Map(K, V).new
+      @hash.each { |k, v| copy.unsafe_store(k, v) }
+      other.each { |k, v| copy.unsafe_store(k, v) }
+      copy
+    end
+  end
+
+  # Returns a new map without nil values.
+  def compact : Sync::Map(K, V)
+    @mu.synchronize do
+      copy = Sync::Map(K, V).new
+      @hash.each do |k, v|
+        copy.unsafe_store(k, v) unless v.nil?
+      end
+      copy
+    end
+  end
+
+  # Removes nil values in place.
+  def compact! : self
+    @mu.synchronize { @hash.compact! }
+    self
+  end
+
+  # Returns an Array of {K, V} tuples.
+  def to_a : Array({K, V})
+    @mu.synchronize { @hash.to_a }
+  end
 end
