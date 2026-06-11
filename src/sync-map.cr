@@ -1,3 +1,5 @@
+require "mutex"
+
 # A thread-safe map (Hash) that is safe for concurrent use
 # by multiple fibers without additional locking or coordination.
 #
@@ -9,15 +11,30 @@
 class Sync::Map(K, V)
   VERSION = "0.1.0"
 
+  # Operations for the `compute` method, matching xsync.ComputeOp.
+  enum ComputeOp
+    Cancel = 0
+    Update = 1
+    Delete = 2
+  end
+
   @hash = Hash(K, V).new
   @mu = ::Mutex.new
 
-  # Creates a new empty Sync::Map.
   def initialize
   end
 
-  # Returns the value stored in the map for a key, or nil if no
-  # value is present. The ok result indicates whether value was found.
+  # Creates a new map initialized from a standard Hash.
+  def self.new(hash : Hash(K, V))
+    map = new
+    hash.each { |k, v| map.store(k, v) }
+    map
+  end
+
+  # --- Go sync.Map parity ---
+
+  # Returns the value stored in the map for a key, or zero value if absent.
+  # The ok result indicates whether value was found in the map.
   def load(key : K) : {V, Bool}
     @mu.synchronize { @hash[key]?.try { |v| {v, true} } || {V.zero, false} }
   end
@@ -27,7 +44,7 @@ class Sync::Map(K, V)
     @mu.synchronize { @hash[key] = value }
   end
 
-  # Deletes the value for a key. If the key is not in the map, does nothing.
+  # Deletes the value for a key. Does nothing if the key is absent.
   def delete(key : K) : Nil
     @mu.synchronize { @hash.delete(key) }
   end
@@ -81,7 +98,7 @@ class Sync::Map(K, V)
     end
   end
 
-  # Swaps old and new values for key if the value stored in the map is equal to old.
+  # Swaps old and new values for key if the current value equals old.
   def compare_and_swap(key : K, old : V, new : V) : Bool
     @mu.synchronize do
       if @hash.has_key?(key) && @hash[key] == old
@@ -141,17 +158,258 @@ class Sync::Map(K, V)
     @mu.synchronize { @hash.values }
   end
 
-  # Crystal-idiomatic access: returns value or raises KeyError.
+  # --- Crystal Hash parity ---
+
+  # Returns true if the value is present.
+  def has_value?(val : V) : Bool
+    @mu.synchronize { @hash.has_value?(val) }
+  end
+
+  # Returns the key for the given value. Raises KeyError if absent.
+  def key_for(value : V) : K
+    @mu.synchronize { @hash.key_for(value) }
+  end
+
+  # Returns the key for the given value, or nil if absent.
+  def key_for?(value : V) : K?
+    @mu.synchronize { @hash.key_for?(value) }
+  end
+
+  # If the key is absent, stores the value and returns it.
+  # If the key is present, returns the existing value.
+  def put_if_absent(key : K, value : V) : V
+    @mu.synchronize do
+      if @hash.has_key?(key)
+        @hash[key]
+      else
+        @hash[key] = value
+        value
+      end
+    end
+  end
+
+  # If the key is absent, calls the block, stores the result, and returns it.
+  # If the key is present, returns the existing value.
+  def put_if_absent(key : K, & : K -> V) : V
+    @mu.synchronize do
+      if @hash.has_key?(key)
+        @hash[key]
+      else
+        value = yield(key)
+        @hash[key] = value
+        value
+      end
+    end
+  end
+
+  # Removes and returns the first key-value pair. Raises IndexError if empty.
+  def shift : {K, V}
+    @mu.synchronize do
+      if @hash.empty?
+        raise IndexError.new("shift from empty map")
+      end
+      key = @hash.first_key
+      value = @hash[key]
+      @hash.delete(key)
+      {key, value}
+    end
+  end
+
+  # Removes and returns the first key-value pair, or nil if empty.
+  def shift? : {K, V}?
+    @mu.synchronize do
+      if @hash.empty?
+        nil
+      else
+        key = @hash.first_key
+        value = @hash[key]
+        @hash.delete(key)
+        {key, value}
+      end
+    end
+  end
+
+  # Returns a shallow copy of the map.
+  def dup : Sync::Map(K, V)
+    @mu.synchronize do
+      copy = Sync::Map(K, V).new
+      @hash.each { |k, v| copy.unsafe_store(k, v) }
+      copy
+    end
+  end
+
+  # Merges entries from another Hash into this map, overwriting existing keys.
+  def merge!(other : Hash(K, V)) : self
+    @mu.synchronize do
+      other.each { |k, v| @hash[k] = v }
+    end
+    self
+  end
+
+  # Returns a new map with entries for which the block returns true.
+  def select(& : K, V -> _) : Sync::Map(K, V)
+    @mu.synchronize do
+      copy = Sync::Map(K, V).new
+      @hash.each do |k, v|
+        copy.unsafe_store(k, v) if yield(k, v)
+      end
+      copy
+    end
+  end
+
+  # Returns a new map with entries for which the block returns false.
+  def reject(& : K, V -> _) : Sync::Map(K, V)
+    @mu.synchronize do
+      copy = Sync::Map(K, V).new
+      @hash.each do |k, v|
+        copy.unsafe_store(k, v) unless yield(k, v)
+      end
+      copy
+    end
+  end
+
+  # Returns the first key in the map.
+  def first_key : K
+    @mu.synchronize { @hash.first_key }
+  end
+
+  # Returns the first key, or nil if empty.
+  def first_key? : K?
+    @mu.synchronize { @hash.first_key? }
+  end
+
+  # Returns the last key in the map.
+  def last_key : K
+    @mu.synchronize { @hash.last_key }
+  end
+
+  # Returns the last key, or nil if empty.
+  def last_key? : K?
+    @mu.synchronize { @hash.last_key? }
+  end
+
+  # Returns the first value in the map.
+  def first_value : V
+    @mu.synchronize { @hash.first_value }
+  end
+
+  # Returns the first value, or nil if empty.
+  def first_value? : V?
+    @mu.synchronize { @hash.first_value? }
+  end
+
+  # Returns the last value in the map.
+  def last_value : V
+    @mu.synchronize { @hash.last_value }
+  end
+
+  # Returns the last value, or nil if empty.
+  def last_value? : V?
+    @mu.synchronize { @hash.last_value? }
+  end
+
+  # --- xsync extended API ---
+
+  # Returns the existing value for the key if present,
+  # while setting the new value for the key.
+  # Stores the new value and returns the existing one if present.
+  # The loaded result is true if the existing value was loaded.
+  def load_and_store(key : K, value : V) : {V, Bool}
+    @mu.synchronize do
+      if @hash.has_key?(key)
+        old = @hash[key]
+        @hash[key] = value
+        {old, true}
+      else
+        @hash[key] = value
+        {V.zero, false}
+      end
+    end
+  end
+
+  # Returns the existing value for the key if present.
+  # Otherwise, computes the value using the provided block and stores it.
+  # The block must return a {value, cancel} tuple.
+  # If cancel is true, the key is not stored.
+  # The loaded result is true if the value was loaded, false if computed.
+  def load_or_compute(key : K, & : -> {V, Bool}) : {V, Bool}
+    @mu.synchronize do
+      if @hash.has_key?(key)
+        {@hash[key], true}
+      else
+        value, cancel = yield
+        if cancel
+          {V.zero, false}
+        else
+          @hash[key] = value
+          {value, false}
+        end
+      end
+    end
+  end
+
+  # Performs an atomic compute operation on the value for key.
+  # The block receives (old_value, loaded) and returns {new_value, op}.
+  # op is a ComputeOp: Update to set, Delete to remove, Cancel to do nothing.
+  # Returns {actual, ok} where ok indicates the entry is present after the call.
+  def compute(key : K, & : V, Bool -> {V, ComputeOp}) : {V, Bool}
+    @mu.synchronize do
+      if @hash.has_key?(key)
+        old = @hash[key]
+        newv, op = yield(old, true)
+        case op
+        in ComputeOp::Delete
+          @hash.delete(key)
+          {old, false}
+        in ComputeOp::Update
+          @hash[key] = newv
+          {newv, true}
+        in ComputeOp::Cancel
+          {old, true}
+        end
+      else
+        newv, op = yield(V.zero, false)
+        if op == ComputeOp::Update
+          @hash[key] = newv
+          {newv, true}
+        else
+          {V.zero, false}
+        end
+      end
+    end
+  end
+
+  # Deletes all entries for which the block returns {true, _}.
+  # If the block returns {_, true}, iteration stops immediately.
+  # Returns the number of deleted entries.
+  def delete_matching(& : K, V -> {Bool, Bool}) : Int32
+    total = 0
+    @mu.synchronize do
+      @hash.each do |key, value|
+        del, stop = yield(key, value)
+        if del
+          @hash.delete(key)
+          total += 1
+        end
+        break if stop
+      end
+    end
+    total
+  end
+
+  # --- Crystal-idiomatic accessors ---
+
+  # Returns value or raises KeyError.
   def [](key : K) : V
     @mu.synchronize { @hash[key] }
   end
 
-  # Crystal-idiomatic access: returns value or nil.
+  # Returns value or nil.
   def []?(key : K) : V?
     @mu.synchronize { @hash[key]? }
   end
 
-  # Crystal-idiomatic store.
+  # Stores a value.
   def []=(key : K, value : V) : V
     @mu.synchronize { @hash[key] = value }
   end
@@ -159,5 +417,10 @@ class Sync::Map(K, V)
   # Returns value for key or the given default.
   def fetch(key : K, default : V) : V
     @mu.synchronize { @hash.fetch(key, default) }
+  end
+
+  # Unsafe store (no locking) for internal use during locked operations.
+  protected def unsafe_store(key : K, value : V) : Nil
+    @hash[key] = value
   end
 end
