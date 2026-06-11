@@ -1,9 +1,20 @@
-/docs/
+# Local Crystal cache
+.crystal-cache/
+
+# Temporary working artifacts
+temp/
+
+# Dependency lock (libraries don't need it)
+/shard.lock
+
+# Shards dependency directories
 /lib/
-/bin/
 /.shards/
+
+# Compiled binaries
+/bin/
 *.dwarf
 
-# Libraries don't need dependency lock
-# Dependencies will be locked in applications that use them
-/shard.lock
+# Local agent/tool settings
+.claude/
+.lattice-cache/

@@ -1,0 +1,7 @@
+# Ameba configuration for sync-map
+Version: "1.7.0-dev"
+
+Excluded:
+  - temp/**/*
+  - lib/**/*
+  - vendor/**/*
