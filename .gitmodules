@@ -1,0 +1,6 @@
+[submodule "vendor/xsync"]
+	path = vendor/xsync
+	url = https://github.com/puzpuzpuz/xsync
+[submodule "vendor/go"]
+	path = vendor/go
+	url = https://github.com/golang/go

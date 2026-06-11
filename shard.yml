@@ -1,0 +1,9 @@
+name: sync-map
+version: 0.1.0
+
+authors:
+  - Dominic Sisneros <dsisnero@gmail.com>
+
+crystal: '>= 1.20.2'
+
+license: MIT
