@@ -1016,4 +1016,81 @@ describe Sync::Map do
       iter.to_a.should eq([1])
     end
   end
+
+  # --- Cycle 7: fetch+block, update, dig, key_for+block ---
+
+  describe "#fetch with block" do
+    it "yields key when missing" do
+      m = Sync::Map(String, Int32).new
+      result = m.fetch("missing", &.size)
+      result.should eq(7)
+    end
+
+    it "does not yield when key present" do
+      m = Sync::Map(String, Int32).new
+      m.store("foo", 42)
+      result = m.fetch("foo", &.size)
+      result.should eq(42)
+    end
+  end
+
+  describe "#update" do
+    it "updates existing value via block" do
+      m = Sync::Map(String, Int32).new
+      m.store("foo", 42)
+      m.update("foo") { |v| v * 2 }
+      val, _ = m.load("foo")
+      val.should eq(84)
+    end
+
+    it "raises on missing key" do
+      m = Sync::Map(String, Int32).new
+      expect_raises(KeyError) { m.update("foo") { |v| v * 2 } }
+    end
+  end
+
+  describe "#dig" do
+    it "traverses nested maps" do
+      inner = Sync::Map(String, Int32).new
+      inner.store("b", 2)
+      outer = Sync::Map(String, Sync::Map(String, Int32)).new
+      outer.store("a", inner)
+      outer.dig("a", "b").should eq(2)
+    end
+
+    it "raises on missing key in path" do
+      m = Sync::Map(String, Int32).new
+      m.store("a", 1)
+      expect_raises(KeyError) { m.dig("b") }
+    end
+  end
+
+  describe "#dig?" do
+    it "returns value through nested path" do
+      inner = Sync::Map(String, Int32).new
+      inner.store("b", 2)
+      outer = Sync::Map(String, Sync::Map(String, Int32)).new
+      outer.store("a", inner)
+      outer.dig?("a", "b").should eq(2)
+    end
+
+    it "returns nil on missing key in path" do
+      m = Sync::Map(String, Int32).new
+      m.dig?("missing").should be_nil
+    end
+  end
+
+  describe "#key_for with block" do
+    it "yields value when missing" do
+      m = Sync::Map(String, Int32).new
+      result = m.key_for(42) { |v| "default_for_#{v}" }
+      result.should eq("default_for_42")
+    end
+
+    it "does not yield when value found" do
+      m = Sync::Map(String, Int32).new
+      m.store("foo", 42)
+      m.key_for(42).should eq("foo")
+    end
+  end
 end

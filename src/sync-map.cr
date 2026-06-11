@@ -170,6 +170,11 @@ class Sync::Map(K, V)
     @mu.synchronize { @hash.key_for(value) }
   end
 
+  # Returns the key for value, or yields the value to the block if absent.
+  def key_for(value : V, & : V -> K) : K
+    @mu.synchronize { @hash.key_for(value) { |v| yield v } }
+  end
+
   # Returns the key for the given value, or nil if absent.
   def key_for?(value : V) : K?
     @mu.synchronize { @hash.key_for?(value) }
@@ -417,6 +422,48 @@ class Sync::Map(K, V)
   # Returns value for key or the given default.
   def fetch(key : K, default : V) : V
     @mu.synchronize { @hash.fetch(key, default) }
+  end
+
+  # Returns value for key or yields the key to the block if absent.
+  def fetch(key : K, & : K -> V) : V
+    @mu.synchronize { @hash.fetch(key) { |k| yield k } }
+  end
+
+  # Updates the existing value for key via the block. Raises KeyError if absent.
+  def update(key : K, & : V -> V) : V
+    @mu.synchronize do
+      @hash[key] = yield @hash[key]
+    end
+  end
+
+  # Traverses nested structures using #dig on each level. Raises on missing key.
+  def dig(key : K, *subkeys)
+    @mu.synchronize do
+      if (value = @hash[key]) && value.responds_to?(:dig)
+        value.dig(*subkeys)
+      else
+        raise KeyError.new "Map value not diggable for key: #{key.inspect}"
+      end
+    end
+  end
+
+  # Returns the value at key. Raises on missing key.
+  def dig(key : K)
+    @mu.synchronize { @hash[key] }
+  end
+
+  # Traverses nested structures using #dig? on each level. Returns nil on miss.
+  def dig?(key : K, *subkeys)
+    @mu.synchronize do
+      if (value = @hash[key]?) && value.responds_to?(:dig?)
+        value.dig?(*subkeys)
+      end
+    end
+  end
+
+  # Returns the value at key or nil.
+  def dig?(key : K)
+    @mu.synchronize { @hash[key]? }
   end
 
   # Unsafe store (no locking) for internal use during locked operations.
