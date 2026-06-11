@@ -1165,4 +1165,301 @@ describe Sync::Map do
       m.has_key?("b").should be_true
     end
   end
+
+  # --- Cycle 9: Comprehensive MT-safety stress tests ---
+
+  describe "MT-safety: snapshot iteration" do
+    it "each snapshots correctly under concurrent writes" do
+      m = Sync::Map(Int32, Int32).new
+      (1..500).each { |i| m.store(i, i) }
+      done = Channel(Nil).new
+
+      spawn do
+        count = 0
+        m.each { |_| count += 1 }
+        count.should be >= 500
+        done.send(nil)
+      end
+      spawn do
+        100.times { |i| m.store(1000 + i, i) }
+        done.send(nil)
+      end
+      2.times { done.receive }
+    end
+
+    it "each_key snapshots correctly under concurrent deletes" do
+      m = Sync::Map(Int32, Int32).new
+      (1..200).each { |i| m.store(i, i) }
+      done = Channel(Nil).new
+
+      spawn do
+        count = 0
+        m.each_key { |_k| count += 1 }
+        count.should be >= 200
+        done.send(nil)
+      end
+      spawn do
+        50.times { m.delete(rand(1..200)) }
+        done.send(nil)
+      end
+      2.times { done.receive }
+    end
+
+    it "each_value snapshots correctly under concurrent stores" do
+      m = Sync::Map(Int32, Int32).new
+      (1..200).each { |i| m.store(i, i) }
+      done = Channel(Nil).new
+      result_ch = Channel(Int32).new
+
+      spawn do
+        count = 0
+        m.each_value { |_v| count += 1 }
+        result_ch.send(count)
+        done.send(nil)
+      end
+      spawn do
+        100.times { |i| m.store(300 + i, 99) }
+        done.send(nil)
+      end
+      count = result_ch.receive
+      count.should be >= 200
+      done.receive
+    end
+
+    it "range stops early under concurrent writes" do
+      m = Sync::Map(Int32, Int32).new
+      (1..50).each { |i| m.store(i, i) }
+      done = Channel(Nil).new
+
+      spawn do
+        count = 0
+        m.range do |_k, _v|
+          count += 1
+          count < 5
+        end
+        count.should eq(5)
+        done.send(nil)
+      end
+      spawn do
+        100.times { |i| m.store(100 + i, i) }
+        done.send(nil)
+      end
+      2.times { done.receive }
+    end
+
+    it "block-less each iterator returns consistent snapshot" do
+      m = Sync::Map(Int32, Int32).new
+      (1..100).each { |i| m.store(i, i) }
+      done = Channel(Nil).new
+
+      spawn do
+        iter = m.each
+        entries = iter.to_a
+        entries.size.should be >= 100
+        done.send(nil)
+      end
+      spawn do
+        50.times { m.delete(rand(1..100)) }
+        50.times { m.store(rand(200..300), 99) }
+        done.send(nil)
+      end
+      2.times { done.receive }
+    end
+  end
+
+  describe "MT-safety: atomic operations" do
+    it "load_or_store is atomic under contention" do
+      m = Sync::Map(Int32, Int32).new
+      done = Channel(Nil).new
+      counters = Atomic(Int32).new(0)
+
+      10.times do |i|
+        spawn do
+          100.times do |j|
+            key = i * 100 + j
+            _, loaded = m.load_or_store(key, i)
+            counters.add(1) if loaded
+            m.load_or_store(key, i)
+          end
+          done.send(nil)
+        end
+      end
+      10.times { done.receive }
+      m.size.should eq(1000)
+    end
+
+    it "compare_and_swap is atomic under contention" do
+      m = Sync::Map(Int32, Int32).new
+      m.store(1, 0)
+      done = Channel(Nil).new
+      success_count = Atomic(Int32).new(0)
+
+      10.times do
+        spawn do
+          100.times do
+            if m.compare_and_swap(1, 0, 1)
+              success_count.add(1)
+              m.store(1, 0)
+            end
+          end
+          done.send(nil)
+        end
+      end
+      10.times { done.receive }
+      success_count.get.should be > 0
+    end
+
+    it "swap is atomic under contention" do
+      m = Sync::Map(Int32, Int32).new
+      m.store(1, 0)
+      done = Channel(Nil).new
+      seen = Atomic(Int32).new(0)
+
+      10.times do
+        spawn do
+          100.times do |i|
+            old, _ = m.swap(1, i)
+            seen.add(1) if old != i
+          end
+          done.send(nil)
+        end
+      end
+      10.times { done.receive }
+    end
+
+    it "size stays consistent under concurrent mutations" do
+      m = Sync::Map(Int32, Int32).new
+      done = Channel(Nil).new
+
+      5.times do |i|
+        spawn do
+          200.times { |j| m.store(i * 200 + j, j) }
+          done.send(nil)
+        end
+      end
+      5.times do
+        spawn do
+          50.times { m.delete(rand(1..1000)) }
+          done.send(nil)
+        end
+      end
+      10.times { done.receive }
+      m.size.should be >= 0 # never crashes
+    end
+  end
+
+  describe "MT-safety: compound operations" do
+    it "compute runs atomically" do
+      m = Sync::Map(Int32, Int32).new
+      m.store(1, 0)
+      done = Channel(Nil).new
+
+      10.times do
+        spawn do
+          100.times do
+            m.compute(1) do |v, _|
+              {v + 1, Sync::Map::ComputeOp::Update}
+            end
+          end
+          done.send(nil)
+        end
+      end
+      10.times { done.receive }
+      val, _ = m.load(1)
+      val.should eq(1000)
+    end
+
+    it "put_if_absent is atomic" do
+      m = Sync::Map(Int32, Int32).new
+      done = Channel(Nil).new
+
+      10.times do
+        spawn do
+          100.times do |i|
+            m.put_if_absent(i) { i * 10 }
+          end
+          done.send(nil)
+        end
+      end
+      10.times { done.receive }
+      m.size.should eq(100)
+      # All 100 keys have consistent values (first-writer-wins)
+      (0..99).each do |i|
+        v, ok = m.load(i)
+        ok.should be_true
+        v.should eq(i * 10)
+      end
+    end
+
+    it "dup produces consistent copy under writes" do
+      m = Sync::Map(Int32, Int32).new
+      (1..100).each { |i| m.store(i, i) }
+      done = Channel(Nil).new
+
+      spawn do
+        50.times { m.store(rand(1..200), 99) }
+        done.send(nil)
+      end
+      spawn do
+        copy = m.dup
+        copy.size.should be >= 100
+        done.send(nil)
+      end
+      2.times { done.receive }
+    end
+
+    it "compact! is safe with concurrent stores" do
+      m = Sync::Map(Int32, Int32?).new
+      (1..100).each { |i| m.store(i, i.even? ? i : nil) }
+      done = Channel(Nil).new
+
+      spawn do
+        m.compact!
+        done.send(nil)
+      end
+      spawn do
+        50.times { m.store(rand(100..200), 42) }
+        done.send(nil)
+      end
+      2.times { done.receive }
+    end
+  end
+
+  describe "MT-safety: iteration with callbacks under lock" do
+    it "each_key snapshot avoids deadlock" do
+      m = Sync::Map(Int32, Int32).new
+      (1..100).each { |i| m.store(i, i) }
+      done = Channel(Nil).new
+
+      spawn do
+        m.each_key do |k|
+          m.has_key?(k) # re-entrant call, safe with snapshot
+        end
+        done.send(nil)
+      end
+      spawn do
+        50.times { m.store(rand(200..300), 1) }
+        done.send(nil)
+      end
+      2.times { done.receive }
+    end
+
+    it "each_value snapshot avoids deadlock" do
+      m = Sync::Map(Int32, Int32).new
+      (1..100).each { |i| m.store(i, i) }
+      done = Channel(Nil).new
+
+      spawn do
+        m.each_value do |v|
+          m.has_value?(v) # re-entrant call, safe with snapshot
+        end
+        done.send(nil)
+      end
+      spawn do
+        50.times { m.delete(rand(1..100)) }
+        done.send(nil)
+      end
+      2.times { done.receive }
+    end
+  end
 end

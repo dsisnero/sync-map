@@ -722,9 +722,10 @@ class Sync::Map(K, V)
     end
   end
 
-  # Iterates all keys.
+  # Iterates all keys (snapshot-based).
   def each_key(& : K -> _) : Nil
-    @mu.synchronize { @hash.each_key { |k| yield k } }
+    snapshot = @mu.synchronize { @hash.keys }
+    snapshot.each { |k| yield k }
   end
 
   # Without block, returns an iterator over snapshot keys.
@@ -733,9 +734,10 @@ class Sync::Map(K, V)
     keys.each
   end
 
-  # Iterates all values.
+  # Iterates all values (snapshot-based).
   def each_value(& : V -> _) : Nil
-    @mu.synchronize { @hash.each_value { |v| yield v } }
+    snapshot = @mu.synchronize { @hash.values }
+    snapshot.each { |v| yield v }
   end
 
   # Without block, returns an iterator over snapshot values.
