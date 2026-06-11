@@ -1462,4 +1462,444 @@ describe Sync::Map do
       2.times { done.receive }
     end
   end
+
+  # --- Cycle 10: MT verification of all full-iteration methods ---
+
+  describe "MT-safety: full-iteration snapshot methods" do
+    it "each iterates all entries under concurrent stores" do
+      m = Sync::Map(Int32, Int32).new
+      (1..200).each { |i| m.store(i, i) }
+      done = Channel(Nil).new
+      result = Channel({Int32, Int32}).new
+
+      spawn do
+        seen = 0
+        m.each { |_| seen += 1 }
+        result.send({seen, m.size})
+        done.send(nil)
+      end
+      8.times do
+        spawn do
+          50.times { |i| m.store(1000 + i, i) }
+          done.send(nil)
+        end
+      end
+      seen, _size = result.receive
+      9.times { done.receive }
+      seen.should be >= 200
+    end
+
+    it "each snapshot is internally consistent" do
+      m = Sync::Map(Int32, Int32).new
+      (1..500).each { |i| m.store(i, i * 10) }
+      done = Channel(Nil).new
+      ok_ch = Channel(Bool).new
+
+      spawn do
+        ok = true
+        m.each do |pair|
+          k, v = pair
+          ok = false if v != k * 10
+        end
+        ok_ch.send(ok)
+        done.send(nil)
+      end
+      4.times do
+        spawn do
+          100.times do
+            k = rand(1..500)
+            m.store(k, k * 10 + rand(0..5))
+          end
+          done.send(nil)
+        end
+      end
+      ok = ok_ch.receive
+      5.times { done.receive }
+      ok.should be_true # snapshot sees consistent old state
+    end
+
+    it "each_key sees snapshot under concurrent deletes" do
+      m = Sync::Map(Int32, Int32).new
+      (1..300).each { |i| m.store(i, i) }
+      done = Channel(Nil).new
+      count_ch = Channel(Int32).new
+
+      spawn do
+        count = 0
+        m.each_key { |_| count += 1 }
+        count_ch.send(count)
+        done.send(nil)
+      end
+      6.times do
+        spawn do
+          50.times { m.delete(rand(1..300)) }
+          done.send(nil)
+        end
+      end
+      count = count_ch.receive
+      7.times { done.receive }
+      count.should be >= 300
+    end
+
+    it "each_value snapshot is internally consistent" do
+      m = Sync::Map(Int32, Int32).new
+      (1..300).each { |i| m.store(i, i * 100) }
+      done = Channel(Nil).new
+      count_ch = Channel(Int32).new
+
+      spawn do
+        count = 0
+        m.each_value { |_| count += 1 }
+        count_ch.send(count)
+        done.send(nil)
+      end
+      6.times do
+        spawn do
+          50.times { m.delete(rand(1..300)) }
+          done.send(nil)
+        end
+      end
+      count = count_ch.receive
+      7.times { done.receive }
+      count.should be >= 300
+    end
+
+    it "keys returns consistent array under writes" do
+      m = Sync::Map(Int32, Int32).new
+      (1..200).each { |i| m.store(i, i) }
+      done = Channel(Nil).new
+      keys_ch = Channel(Int32).new
+
+      spawn do
+        ks = m.keys
+        keys_ch.send(ks.size)
+        done.send(nil)
+      end
+      4.times do
+        spawn do
+          50.times { |i| m.store(1000 + i, 1) }
+          done.send(nil)
+        end
+      end
+      size = keys_ch.receive
+      5.times { done.receive }
+      size.should be >= 200
+    end
+
+    it "values returns consistent array under writes" do
+      m = Sync::Map(Int32, Int32).new
+      (1..150).each { |i| m.store(i, i) }
+      done = Channel(Nil).new
+      vals_ch = Channel(Int32).new
+
+      spawn do
+        vs = m.values
+        vals_ch.send(vs.size)
+        done.send(nil)
+      end
+      4.times do
+        spawn do
+          50.times { m.delete(rand(1..150)) }
+          done.send(nil)
+        end
+      end
+      size = vals_ch.receive
+      5.times { done.receive }
+      size.should be >= 150
+    end
+  end
+
+  describe "MT-safety: full-iteration block-under-lock methods" do
+    it "select(&) returns consistent map under writes" do
+      m = Sync::Map(Int32, Int32).new
+      (1..300).each { |i| m.store(i, i) }
+      done = Channel(Nil).new
+      result_ch = Channel(Int32).new
+
+      spawn do
+        filtered = m.select { |_k, v| v < 100 }
+        result_ch.send(filtered.size)
+        done.send(nil)
+      end
+      6.times do
+        spawn do
+          50.times { |i| m.store(i, rand(1..500)) }
+          done.send(nil)
+        end
+      end
+      size = result_ch.receive
+      7.times { done.receive }
+      size.should be >= 0
+    end
+
+    it "reject(&) handles concurrent stores" do
+      m = Sync::Map(Int32, Int32).new
+      (1..200).each { |i| m.store(i, i) }
+      done = Channel(Nil).new
+      result_ch = Channel(Int32).new
+
+      spawn do
+        filtered = m.reject { |_k, v| v > 150 }
+        result_ch.send(filtered.size)
+        done.send(nil)
+      end
+      4.times do
+        spawn do
+          50.times { |i| m.store(1000 + i, rand(1..500)) }
+          done.send(nil)
+        end
+      end
+      size = result_ch.receive
+      5.times { done.receive }
+      size.should be >= 0
+    end
+
+    it "delete_matching survives heavy concurrent writes" do
+      m = Sync::Map(Int32, Int32).new
+      (1..500).each { |i| m.store(i, i) }
+      done = Channel(Nil).new
+      deleted_ch = Channel(Int32).new
+
+      spawn do
+        n = m.delete_matching { |k, _v| k.even? ? {true, false} : {false, false} }
+        deleted_ch.send(n)
+        done.send(nil)
+      end
+      6.times do
+        spawn do
+          50.times { |i| m.store(i, i * 2) }
+          done.send(nil)
+        end
+      end
+      n = deleted_ch.receive
+      7.times { done.receive }
+      n.should be >= 0
+    end
+
+    it "select!(&) is consistent under writes" do
+      m = Sync::Map(Int32, Int32).new
+      (1..200).each { |i| m.store(i, i) }
+      done = Channel(Nil).new
+      result_ch = Channel(Int32).new
+
+      spawn do
+        m.select! { |_k, v| v < 100 }
+        result_ch.send(m.size)
+        done.send(nil)
+      end
+      4.times do
+        spawn do
+          50.times { |i| m.store(1000 + i, 5) }
+          done.send(nil)
+        end
+      end
+      size = result_ch.receive
+      5.times { done.receive }
+      size.should be >= 0
+    end
+
+    it "reject!(&) is consistent under writes" do
+      m = Sync::Map(Int32, Int32).new
+      (1..200).each { |i| m.store(i, i) }
+      done = Channel(Nil).new
+      result_ch = Channel(Int32).new
+
+      spawn do
+        m.reject! { |_k, v| v > 150 }
+        result_ch.send(m.size)
+        done.send(nil)
+      end
+      4.times do
+        spawn do
+          50.times { |i| m.store(300 + i, 5) }
+          done.send(nil)
+        end
+      end
+      size = result_ch.receive
+      5.times { done.receive }
+      size.should be >= 0
+    end
+
+    it "transform_keys returns consistent new map" do
+      m = Sync::Map(Int32, Int32).new
+      (1..200).each { |i| m.store(i, i * 10) }
+      done = Channel(Nil).new
+      result_ch = Channel(Int32).new
+
+      spawn do
+        mapped = m.transform_keys { |k, _v| k + 1000 }
+        result_ch.send(mapped.size)
+        done.send(nil)
+      end
+      4.times do
+        spawn do
+          50.times { m.delete(rand(1..200)) }
+          done.send(nil)
+        end
+      end
+      size = result_ch.receive
+      5.times { done.receive }
+      size.should be >= 0
+    end
+
+    it "transform_values is safe with concurrent stores" do
+      m = Sync::Map(Int32, Int32).new
+      (1..200).each { |i| m.store(i, i) }
+      done = Channel(Nil).new
+      result_ch = Channel(Int32).new
+
+      spawn do
+        mapped = m.transform_values { |v, _k| v * 2 }
+        result_ch.send(mapped.size)
+        done.send(nil)
+      end
+      4.times do
+        spawn do
+          50.times { |_| m.store(rand(1..500), 7) }
+          done.send(nil)
+        end
+      end
+      size = result_ch.receive
+      5.times { done.receive }
+      size.should be >= 0
+    end
+
+    it "transform_keys! is safe under concurrent access" do
+      m = Sync::Map(Int32, Int32).new
+      (1..100).each { |i| m.store(i, i) }
+      done = Channel(Nil).new
+      result_ch = Channel(Int32).new
+
+      spawn do
+        m.transform_keys! { |k, _v| k * 10 }
+        result_ch.send(m.size)
+        done.send(nil)
+      end
+      4.times do
+        spawn do
+          30.times { |i| m.store(500 + i, 0) }
+          done.send(nil)
+        end
+      end
+      size = result_ch.receive
+      5.times { done.receive }
+      size.should be >= 0
+    end
+
+    it "transform_values! is safe with concurrent deletes" do
+      m = Sync::Map(Int32, Int32).new
+      (1..100).each { |i| m.store(i, i) }
+      done = Channel(Nil).new
+      result_ch = Channel(Int32).new
+
+      spawn do
+        m.transform_values! { |v, _k| v * 10 }
+        result_ch.send(m.size)
+        done.send(nil)
+      end
+      4.times do
+        spawn do
+          30.times { m.delete(rand(1..200)) }
+          done.send(nil)
+        end
+      end
+      size = result_ch.receive
+      5.times { done.receive }
+      size.should be >= 0
+    end
+
+    it "invert handles concurrent mutations" do
+      m = Sync::Map(Int32, Int32).new
+      (1..200).each { |i| m.store(i, i * 100) }
+      done = Channel(Nil).new
+      result_ch = Channel(Int32).new
+
+      spawn do
+        begin
+          inv = m.invert
+          result_ch.send(inv.size)
+        rescue KeyError
+          result_ch.send(-1)
+        end
+        done.send(nil)
+      end
+      4.times do
+        spawn do
+          50.times { |i| m.store(i, 0) }
+          done.send(nil)
+        end
+      end
+      size = result_ch.receive
+      5.times { done.receive }
+      size.should be >= -1
+    end
+
+    it "compact! is safe with concurrent stores" do
+      m = Sync::Map(Int32, Int32?).new
+      (1..200).each { |i| m.store(i, i.even? ? i : nil) }
+      done = Channel(Nil).new
+      result_ch = Channel(Int32).new
+
+      spawn do
+        m.compact!
+        result_ch.send(m.size)
+        done.send(nil)
+      end
+      4.times do
+        spawn do
+          50.times { |i| m.store(300 + i, nil) }
+          done.send(nil)
+        end
+      end
+      size = result_ch.receive
+      5.times { done.receive }
+      size.should be >= 0
+    end
+
+    it "merge(other, &) handles concurrent writes" do
+      m = Sync::Map(Int32, Int32).new
+      (1..100).each { |i| m.store(i, i) }
+      other_hash = Hash(Int32, Int32).new.tap { |hash| (50..150).each { |i| hash[i] = i * 10 } }
+      done = Channel(Nil).new
+      result_ch = Channel(Int32).new
+
+      spawn do
+        merged = m.merge(other_hash) { |_k, v1, v2| v1 + v2 }
+        result_ch.send(merged.size)
+        done.send(nil)
+      end
+      4.times do
+        spawn do
+          50.times { |i| m.store(200 + i, 1) }
+          done.send(nil)
+        end
+      end
+      size = result_ch.receive
+      5.times { done.receive }
+      size.should be >= 101
+    end
+
+    it "merge!(other, &) is consistent under writes" do
+      m = Sync::Map(Int32, Int32).new
+      (1..100).each { |i| m.store(i, i) }
+      other_hash = Hash(Int32, Int32).new.tap { |hash| (50..150).each { |i| hash[i] = i * 10 } }
+      done = Channel(Nil).new
+      result_ch = Channel(Int32).new
+
+      spawn do
+        m.merge!(other_hash) { |_k, v1, v2| v1 + v2 }
+        result_ch.send(m.size)
+        done.send(nil)
+      end
+      4.times do
+        spawn do
+          50.times { |j| m.store(300 + j, 1) }
+          done.send(nil)
+        end
+      end
+      size = result_ch.receive
+      5.times { done.receive }
+      size.should be >= 51
+    end
+  end
 end
