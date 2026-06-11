@@ -45,33 +45,48 @@ class Sync::HashTrieMap(K, V)
   end
 
   private def lock_leaf(h : UInt64) : Node(K, V)
+    # Walk from root to leaf without locking (lock-free descent)
+    node = as_node(@root.get(:acquire))
+    while node.levels > 0
+      shift = (node.levels * BITS).to_u32
+      idx = ((h >> (shift - BITS)) & MASK).to_i
+      child = node.load_child(idx)
+      if child.address == 0
+        node.mu.lock
+        child = node.load_child(idx)
+        if child.address == 0
+          new_child = Node(K, V).new(node.levels - 1)
+          node.store_child(idx, new_child.as(Void*))
+          node.mu.unlock
+          node = new_child
+          next
+        end
+        node.mu.unlock
+      end
+      node = as_node(child)
+    end
+    # At leaf: lock, expand if full, descend to new leaf
     loop do
-      node = as_node(@root.get(:acquire))
+      node.mu.lock
+      if node.entries.size < LEAF_LIMIT
+        return node
+      end
+      expand(node)
+      node.mu.unlock
+      # Walk down from expanded node to leaf for h
       while node.levels > 0
         shift = (node.levels * BITS).to_u32
         idx = ((h >> (shift - BITS)) & MASK).to_i
         child = node.load_child(idx)
         if child.address == 0
-          node.mu.lock
-          child = node.load_child(idx)
-          if child.address == 0
-            new_child = Node(K, V).new(node.levels - 1)
-            node.store_child(idx, new_child.as(Void*))
-            node.mu.unlock
-            node = new_child
-            next
-          end
-          node.mu.unlock
+          child_node = Node(K, V).new(node.levels - 1)
+          node.store_child(idx, child_node.as(Void*))
+          node = child_node
+        else
+          node = as_node(child)
         end
-        node = as_node(child)
       end
-      node.mu.lock
-      if node.entries.size >= LEAF_LIMIT
-        expand(node)
-        node.mu.unlock
-        next
-      end
-      return node
+      # node is now a leaf, loop back to lock it
     end
   end
 
