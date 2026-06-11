@@ -229,13 +229,13 @@ describe Sync::Map do
       seen["c"].should eq(3)
     end
 
-    it "stops when block returns false (Range semantics)" do
+    it "range stops when block returns false (Go semantics)" do
       m = Sync::Map(String, Int32).new
       m.store("a", 1)
       m.store("b", 2)
       m.store("c", 3)
       count = 0
-      m.each do |_, _|
+      m.range do |_, _|
         count += 1
         false
       end
@@ -1091,6 +1091,78 @@ describe Sync::Map do
       m = Sync::Map(String, Int32).new
       m.store("foo", 42)
       m.key_for(42).should eq("foo")
+    end
+  end
+
+  # --- Cycle 8: Enumerable, select!/reject! with keys ---
+
+  describe "Enumerable methods" do
+    it "all? checks all entries" do
+      m = Sync::Map(String, Int32).new
+      m.store("a", 1)
+      m.store("b", 2)
+      m.all? { |_k, v| v > 0 }.should be_true
+      m.all? { |_k, v| v > 1 }.should be_false
+    end
+
+    it "any? checks any entry matches" do
+      m = Sync::Map(String, Int32).new
+      m.store("a", 1)
+      m.store("b", 2)
+      m.any? { |_k, v| v == 2 }.should be_true
+      m.any? { |_k, v| v == 99 }.should be_false
+    end
+
+    it "find returns first matching entry" do
+      m = Sync::Map(String, Int32).new
+      m.store("a", 1)
+      m.store("b", 2)
+      result = m.find { |_k, v| v > 1 }
+      result.should_not be_nil
+      if result
+        result[1].should eq(2)
+      end
+    end
+
+    it "map transforms entries" do
+      m = Sync::Map(String, Int32).new
+      m.store("a", 1)
+      m.store("b", 2)
+      values = m.map { |_k, v| v * 10 }
+      values.sort.should eq([10, 20])
+    end
+
+    it "count with block counts matching entries" do
+      m = Sync::Map(String, Int32).new
+      m.store("a", 1)
+      m.store("b", 2)
+      m.store("c", 3)
+      m.count { |_k, v| v > 1 }.should eq(2)
+    end
+  end
+
+  describe "#select! with keys" do
+    it "keeps only given keys in place" do
+      m = Sync::Map(String, Int32).new
+      m.store("a", 1)
+      m.store("b", 2)
+      m.store("c", 3)
+      m.select!("a", "c")
+      m.size.should eq(2)
+      m.has_key?("a").should be_true
+      m.has_key?("b").should be_false
+    end
+  end
+
+  describe "#reject! with keys" do
+    it "removes given keys in place" do
+      m = Sync::Map(String, Int32).new
+      m.store("a", 1)
+      m.store("b", 2)
+      m.store("c", 3)
+      m.reject!("a", "c")
+      m.size.should eq(1)
+      m.has_key?("b").should be_true
     end
   end
 end

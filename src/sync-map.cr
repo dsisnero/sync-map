@@ -13,6 +13,8 @@ require "sync/mutex"
 # - Go stdlib sync.Map: vendor/go/src/sync/map.go (Go 1.24+, HashTrieMap-backed)
 # - xsync.Map: vendor/xsync/map.go (puzpuzpuz/xsync, CLHT-based)
 class Sync::Map(K, V)
+  include Enumerable({K, V})
+
   VERSION = "0.1.0"
 
   # Operations for the `compute` method, matching xsync.ComputeOp.
@@ -700,19 +702,24 @@ class Sync::Map(K, V)
 
   # --- Block-less iterators ---
 
-  # Returns a snapshot of all entries as an Array, then yields each.
-  # Returns an Iterator({K, V}) when called without a block.
-  def each(& : K, V -> _) : Nil
+  # Yields each key-value pair as {K, V} tuple (Enumerable contract).
+  def each(& : {K, V} -> _) : Nil
     snapshot = @mu.synchronize { @hash.to_a }
-    snapshot.each do |key, value|
-      break unless yield(key, value)
-    end
+    snapshot.each { |pair| yield pair }
   end
 
   # Without block, returns a snapshot iterator.
   def each : Iterator({K, V})
     entries = @mu.synchronize { @hash.to_a }
     entries.each
+  end
+
+  # Go sync.Map Range semantics: iterates entries, stops when block returns falsey.
+  def range(& : K, V -> _) : Nil
+    snapshot = @mu.synchronize { @hash.to_a }
+    snapshot.each do |key, value|
+      break unless yield(key, value)
+    end
   end
 
   # Iterates all keys.
@@ -735,5 +742,21 @@ class Sync::Map(K, V)
   def each_value : Iterator(V)
     vals = @mu.synchronize { @hash.values }
     vals.each
+  end
+
+  # --- In-place key-based filtering ---
+
+  # Removes all entries except those with the given keys.
+  def select!(*keys : K) : self
+    keys_set = keys.to_set
+    @mu.synchronize { @hash.select! { |k, _v| keys_set.includes?(k) } }
+    self
+  end
+
+  # Removes entries with the given keys.
+  def reject!(*keys : K) : self
+    keys_set = keys.to_set
+    @mu.synchronize { @hash.reject! { |k, _v| keys_set.includes?(k) } }
+    self
   end
 end
