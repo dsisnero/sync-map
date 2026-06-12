@@ -6,7 +6,7 @@ require "sync/mutex"
 
 class Sync::HashTrieMap(K, V)
   BITS = 5_u32; SIZE = 32; MASK = SIZE - 1
-  MAX_DEPTH = 6
+  MAX_DEPTH = 2
 
   private class Node(K, V)
     getter mu = Sync::Mutex.new(:unchecked)
