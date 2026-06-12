@@ -1,93 +1,109 @@
 # Concurrent Map Benchmarks
 
-Single-threaded 100% read benchmark. Crystal 1.20.2, `--release` mode.
-macOS aarch64 (Apple Silicon).
+Crystal 1.20.2, `--release`, macOS aarch64 (Apple Silicon).
+Multi-threaded: `-Dpreview_mt -Dexecution_context`.
+
+All benchmarks use a result sink (`sink += 1 if ok`) to prevent dead
+code elimination. Each map is pre-filled with 1,000 Int32 entries
+before the timed read loop.
 
 ## Implementations
 
-| Name | Backing | Locking |
-|------|---------|---------|
+| Name | Backing | Read Locking |
+|------|---------|-------------|
 | `Sync::Map` | `Hash(K,V)` | `Sync::Mutex(:unchecked)` |
-| `Sync::HashTrieMap` | Hash trie (32-way, lucaong/immutable pattern) | Lock-free reads, per-node mutex writes |
-| `Sync::XMap` | CLHT (Cache-Line Hash Table, xsync port) | Lock-free reads, per-bucket mutex writes |
+| `Sync::HashTrieMap` | Hash trie (32-way, immutable pattern, max depth 6) | Lock-free (atomic child pointers) |
+| `Sync::XMap` | CLHT (Cache-Line Hash Table, 5 entries/bucket, 64B cache line) | Lock-free (atomic meta + entry pointers) |
 
-## Results: Int Keys, 100% Reads
+## Results: Int Keys, 100% Reads, size=1,000
 
-| Size | Sync::Map | XMap | Speedup |
-|------|-----------|------|---------|
-| 100 | 44M ops/s | 108M ops/s | **2.5x** |
-| 1,000 | 34M ops/s | 44M ops/s | **1.3x** |
-| 5,000 | 32M ops/s | 11M ops/s | 0.3x |
+| Map | Single-thread | 4-fiber MT | MT Scaling |
+|-----|--------------|-----------|------------|
+| `Sync::Map` | **35M** ops/s | 37M ops/s | 1.06x |
+| `Sync::HashTrieMap` | 9M ops/s | 17M ops/s | **1.89x** |
+| `Sync::XMap` | **67M** ops/s | **75M** ops/s | 1.12x |
 
-## Results: String Keys, 100% Reads
+## Results: Int Keys, 100% Reads, size=100
 
-| Size | Sync::Map | XMap | Speedup |
-|------|-----------|------|---------|
-| 100 | 17M ops/s | 82M ops/s | **4.8x** |
-| 1,000 | 24M ops/s | 26M ops/s | 1.1x |
+| Map | Single-thread |
+|-----|--------------|
+| `Sync::Map` | 57M ops/s |
+| `Sync::HashTrieMap` | 14M ops/s |
+| `Sync::XMap` | 206M ops/s |
+
+## Results: Int Keys, 100% Reads, size=5,000
+
+| Map | Single-thread |
+|-----|--------------|
+| `Sync::Map` | **58M** ops/s |
+| `Sync::HashTrieMap` | 19M ops/s |
+| `Sync::XMap` | 19M ops/s |
 
 ## Analysis
 
-### XMap (CLHT)
+### XMap (CLHT) — Best overall
 
-**Strengths:**
-- 2.5x (int) to 4.8x (string) faster at size=100 — SWAR-based
-  metadata filtering avoids key comparisons for misses
-- Lock-free reads: no mutex overhead on the load path
-- Immutable entry pointers: atomic swaps, no torn reads
+| Size | vs Sync::Map | Why |
+|------|-------------|-----|
+| 100 | **3.6x** | SWAR meta filtering avoids key comparisons |
+| 1,000 | **1.9x** ST, **2.0x** MT | Lock-free reads, flat bucket structure |
+| 5,000 | 0.3x | No resize — overflow chains degrade to O(n) |
 
-**Weaknesses:**
-- Degrades at size=5,000 (11M vs 32M) — without resize, bucket
-  chains grow long. 5,000 entries / 32 buckets = ~156 entries per
-  chain = ~31 overflow buckets. Each lookup scans all meta bytes.
-- No cooperative resize implemented yet (upstream xsync has it)
-- String hashing cost dominates at larger sizes
+**Strengths:** Fastest at small sizes, good MT scaling potential,
+SWAR byte-level matching avoids expensive key comparisons on misses.
 
-### Sync::Map (baseline)
+**Weaknesses:** Degrades at >1,000 entries without cooperative resize.
+5 entries per bucket × 32 buckets = 160 base capacity. After that,
+overflow chain traversal dominates.
 
-**Strengths:**
-- Consistent O(1) performance across all sizes
-- Full Crystal `Hash` API surface + `Enumerable`
-- Simple, predictable, well-tested
+### Sync::Map (Mutex + Hash) — Most consistent
 
-**Weaknesses:**
-- Every operation acquires a mutex, even reads
-- No read scalability — all readers serialize
+**Strengths:** O(1) performance at all sizes. Predictable, well-tested,
+full Crystal Hash API. No degradation at scale.
 
-### HashTrieMap
+**Weaknesses:** Mutex on every operation limits MT scaling (1.06x).
+All readers serialize on the single mutex.
 
-**Not benchmarked** — sequential store (bulk insert) is
-pathologically slow due to `lock_leaf` retry loop with expansion.
-Each expansion redistributes all existing entries. For 1,000
-entries, ~31 expansions × ~15,500 redistribute operations.
-Needs bulk-load optimization before usable.
+### HashTrieMap — Best MT scaling, low base
+
+**Strengths:** 1.89x MT scaling — lock-free reads scale with cores.
+Correct hash trie distribution (each level uses distinct hash bits).
+
+**Weaknesses:** 6-level atomic descent overhead (6 atomic loads per
+read). Slower than Sync::Map at all sizes in single-thread.
+32 StaticArray per node (256 bytes) is memory-heavy.
 
 ## Conclusions
 
-1. **For small maps (<1,000 entries):** `XMap` is the clear winner,
-   especially with string keys where SWAR filtering avoids expensive
-   key comparisons.
+1. **For all-around use:** `XMap` — fastest single-thread AND multi-thread
+   at ≤1,000 entries. Needs resize for larger datasets.
 
-2. **For medium maps (1,000-10,000):** `Sync::Map` is the safe choice
-   until XMap gets cooperative resize.
+2. **For consistent performance at any size:** `Sync::Map` — O(1) hash
+   lookups, no degradation. Best choice when data size is unpredictable.
 
-3. **For lock-free reads:** Both XMap and HashTrieMap demonstrate
-   that Crystal can support concurrent data structures with atomic
-   pointer operations. The key is `StaticArray(Atomic(Pointer(Void)))`
-   with indexed assignment for writes and `.get(:acquire)` for reads.
+3. **For high-concurrency reads:** `HashTrieMap` — best MT scaling (1.89x),
+   but starts from a lower base. Viable if contention on Sync::Map's mutex
+   becomes the bottleneck at high core counts.
 
-4. **Compilation cost:** Crystal's generic instantiation time is a
-   real constraint. Single-type benchmarks compile in 5-30s; multi-type
-   benchmarks compile in minutes.
+4. **Dead code elimination trap:** Crystal's `--release` mode eliminates
+   unused return values. All benchmarks MUST use a result sink
+   (e.g., `sink += 1 if ok`) for valid measurements.
 
 ## Crystal-Specific Lessons
 
 See `docs/crystal-collection-design.md` in the porting-to-crystal skill.
 
-- `StaticArray(Atomic(T)).new` works but indexed access returns value
-  copies. Use `sa[idx] = Atomic.new(val)` for writes, `sa[idx].get()`
-  for reads.
+- `StaticArray(Atomic(T))` indexed access returns value copies.
+  Use `sa[idx] = Atomic.new(val)` for writes, `sa[idx].get()` for reads.
 - Keep `.as(GenericClass(K,V))` calls to ≤2 per method.
-- Tagged pointers (bit-tagging on Void*) compiled 50x slower than
-  unified-node design.
-- `lucaong/immutable` is the reference Crystal hash trie implementation.
+- Tagged pointers (bit-tagging on Void*) compiled 50x slower.
+- `lucaong/immutable` is the reference Crystal hash trie.
+- Depth-increasing levels (immutable pattern) is the correct trie design
+  but adds atomic descent overhead in single-thread.
+- `--release` eliminates dead code — always sink benchmark results.
+
+## Benchmark Harness
+
+- `benchmarks/bench_int.cr` — single-thread read benchmark
+- `benchmarks/bench_mt.cr` — multi-threaded read benchmark
+- Run: `crystal build --release -Dpreview_mt -o bin benchmarks/bench_mt.cr && ./bin`
