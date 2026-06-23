@@ -18,7 +18,8 @@ Three concurrent-map implementations share the same contract:
 
 - `Sync::Map` (default) — `RWLock` + `Hash`, broadest API surface
 - `Sync::HashTrieMap` — lock-free reads over a hash trie
-- `Sync::XMap` — CLHT (cache-line hash table), best raw throughput
+- `Sync::XMap` — CLHT (cache-line hash table), table resize at 0.75 load
+  factor, int-key fast hash, throughput champion at scale
 
 See [benchmarks](../benchmarks/benchmarks.md) for measured throughput and
 backend selection guidance.

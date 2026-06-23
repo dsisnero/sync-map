@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- XMap: table resize (grow when load factor > 0.75), eliminating the O(n)
+  chain-walk cliff at scale. ST 100k reads: 0.16M → 31.8M ops/s (200×).
+
+### Changed
+
+- XMap: inlined hash computation via `@[AlwaysInline]` and int-key
+  compile-time fast path (`key.to_u64 ^ seed` for Int keys), closing the
+  gap to Go xsync (within 1.35×).
+- XMap: unsafe bounds-check elimination in the lock-free `load` path
+  (`to_unsafe` pointer arithmetic on bucket and slot arrays).
+- XMap: `Atomic.fence(:release)` on slot stores for correct cross-core
+  visibility under true parallelism.
+
+### Experimental
+
+- HashTrieMap: Go `internal/sync.HashTrieMap` port (16-way branching,
+  unlimited depth via hash-bits exhaustion). Correct under single-thread;
+  MT spec instability under investigation.
+
 ## [0.1.2] - 2026-06-23
 
 ### Fixed

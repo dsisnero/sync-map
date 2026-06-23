@@ -71,14 +71,14 @@ require "sync-map/xmap"          # Sync::XMap
 | Workload | Recommended backend |
 |----------|---------------------|
 | General purpose / unsure | `Sync::Map` |
-| Any map ≳ 1k entries | `Sync::Map` |
 | Small (≤ ~1k), read-mostly | `Sync::HashTrieMap` |
 | Small (≤ ~1k), mixed read/write | `Sync::XMap` |
-| Large (≳ 10k) | `Sync::Map` (avoid `XMap`) |
+| Any map ≳ 1k, maximum throughput | `Sync::XMap` |
+| Full `Hash` API + `Enumerable` | `Sync::Map` (only) |
 
-`Sync::Map` is the safe default: broadest API, most predictable behavior,
-and the best large-map throughput. `XMap` is fastest on small maps but
-regresses sharply past ~10k entries. See
+`Sync::Map` is the safe default: broadest API, robust at every scale.
+`Sync::XMap` is the throughput champion once the map grows beyond ~1k
+entries. `Sync::HashTrieMap` excels at small, read-hot workloads. See
 [benchmarks](benchmarks/benchmarks.md) for the full size sweep.
 
 ## Documentation

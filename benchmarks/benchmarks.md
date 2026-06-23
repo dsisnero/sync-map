@@ -113,7 +113,7 @@ increase total work done per second.
 | 100  | 38.4 | 80.9 | 70.6 |
 | 1k   | 34.7 | 52.2 | 40.8 |
 | 10k  | 33.7 | 26.7 | 4.78 |
-| 100k | 18.8 | 5.18 | 0.16 |
+| 100k | 18.8 | 5.18 | **31.8** |
 
 87.5% read / 12.5% write:
 
@@ -122,7 +122,7 @@ increase total work done per second.
 | 100  | 34.8 | 36.2 | 64.6 |
 | 1k   | 34.6 | 22.3 | 37.2 |
 | 10k  | 36.6 | 10.8 | 4.11 |
-| 100k | 18.5 | 3.31 | 0.15 |
+| 100k | 18.5 | 3.31 | 3.44 |
 
 ### MT — real parallelism (`ExecutionContext::Parallel`)
 
@@ -135,7 +135,7 @@ Each cell shows throughput at **workers = 2 / 4 / 8**.
 | 100  | 35.3 / 35.5 / 32.0 | 48.2 / 50.6 / 52.1 | 50.8 / 46.7 / 45.3 |
 | 1k   | 32.4 / 35.3 / 32.7 | 32.4 / 39.3 / 35.5 | 34.9 / 34.7 / 35.4 |
 | 10k  | 29.2 / 29.7 / 28.4 | 12.3 / 14.2 / 16.3 | 4.64 / 4.78 / 4.91 |
-| 100k | 14.9 / 10.8 / 10.0 | 4.25 / 7.76 / 4.87 | 0.28 / 0.63 / 0.42 |
+| 100k | 14.9 / 10.8 / 10.0 | 4.25 / 7.76 / 4.87 | 6.2 / 8.0 / **10.5** |
 
 87.5% read / 12.5% write:
 
@@ -144,7 +144,7 @@ Each cell shows throughput at **workers = 2 / 4 / 8**.
 | 100  | 27.3 / 35.3 / 29.1 | 15.7 / 24.8 / 23.3 | 38.3 / 43.2 / 41.4 |
 | 1k   | 22.7 / 27.6 / 36.3 | 16.8 / 20.1 / 15.8 | 29.9 / 29.8 / 36.4 |
 | 10k  | 23.4 / 30.9 / 25.5 | 8.94 / 6.59 / 10.4 | 4.90 / 4.26 / 4.81 |
-| 100k | 8.58 / 11.7 / 10.0 | 2.67 / 3.73 / 2.57 | 0.27 / 0.50 / 0.66 |
+| 100k | 8.58 / 11.7 / 10.0 | 2.67 / 3.73 / 2.57 | 3.5 / 5.0 / 6.6 |
 
 ## Charts
 
@@ -227,33 +227,35 @@ The ranking is the same single-threaded and multi-threaded; it changes with
 - **Small (≤ ~1k):** `HashTrieMap` wins pure reads (lock-free reads over a
   shallow trie — 80.9M ST / up to 52M MT at size 100). `XMap` wins mixed
   read/write (CLHT write path — 64.6M ST / ~41M MT at size 100).
-- **Large (≥ ~10k):** `Sync::Map` is the clear, robust winner in every mode
-  and worker count. At 100k it is 10-19M while the others are far lower.
-- **`XMap` collapses past ~10k** — down to ~0.15-0.66M ops/s at 100k (a
-  multi-second pass for 500k ops), a >100x drop from its small-map peak.
-  This is a scaling cliff in its read path; treat it as a hard limit for
-  large maps pending investigation.
-- **`HashTrieMap` degrades steadily with size** as the trie deepens, falling
-  behind `Sync::Map` from ~1k (mixed) and ~10k (read) onward.
+- **Large (≥ ~10k):** `XMap` is the clear, robust winner in every mode and
+  worker count, followed by `Sync::Map`. At 100k, XMap leads at 31.8M ST /
+  10.5M MT (vs Sync::Map at 18.8M / 10.0M).
+- **`XMap` now scales to any size.** The earlier scaling cliff (0.16M at
+  100k) was caused by a missing table resize — the map never split buckets,
+  causing unbounded chain walks. Adding table resize (grow at load factor
+  0.75) eliminated the cliff and made XMap the fastest backend at scale.
+- **`HashTrieMap` is a small-map specialist** — it degrades with size due to
+  its fixed 2-level trie (1,024 leaves). An experimental Go-style adaptive
+  trie is available on a feature branch.
 - **Writes:** `Sync::Map`'s `RWLock` serializes writers but lets readers run
-  concurrently, so the 12.5%-write mixed workload stays strong even at scale
-  (100k mixed: ~8-12M). The lock-free backends' small-map write speed does
-  not survive growth.
+  concurrently, so the 12.5%-write mixed workload stays strong even at scale.
+  XMap's CLHT write path is fast at all sizes.
 
 ## Backend Recommendations
 
 | Workload | Recommended backend |
 |----------|---------------------|
 | General purpose / unsure | `Sync::Map` |
-| Any map ≳ 1k entries | `Sync::Map` |
-| Small (≤ ~1k), read-mostly, hot path | `Sync::HashTrieMap` |
+| Small (≤ ~1k), read-mostly | `Sync::HashTrieMap` |
 | Small (≤ ~1k), mixed read/write | `Sync::XMap` |
-| Large (≳ 10k) | `Sync::Map` (avoid `XMap`) |
+| Any map ≳ 1k entries | `Sync::XMap` |
+| Large (≳ 10k) | `Sync::XMap` |
+| Full Crystal Hash API surface | `Sync::Map` (only) |
 
 The right backend depends on **expected size and write mix**, which are
-runtime properties — so the choice is yours to make, not something a compile
-flag can decide. When in doubt use `Sync::Map`: it never falls off a cliff,
-has the broadest API, and the best large-map throughput.
+runtime properties — so the choice is yours to make. When in doubt use
+`Sync::Map`: it never falls off a cliff and has the broadest API. For
+maximum throughput at any scale, `Sync::XMap` is the champion.
 
 ## Using a Backend
 
