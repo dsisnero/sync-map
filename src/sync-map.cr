@@ -15,7 +15,7 @@ require "sync/rw_lock"
 class Sync::Map(K, V)
   include Enumerable({K, V})
 
-  VERSION = "0.1.0"
+  VERSION = "0.1.2"
 
   # Operations for the `compute` method, matching xsync.ComputeOp.
   enum ComputeOp

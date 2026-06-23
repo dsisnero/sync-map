@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-06-23
+
+### Fixed
+
+- `Sync::Map::VERSION` now matches `shard.yml` (was pinned at `0.1.0`).
+
 ## [0.1.1] - 2026-06-23
 
 ### Added
@@ -44,5 +50,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   execution context has capacity 1, so the previous plain-`spawn` MT
   numbers reflected concurrency, not parallelism.
 
-[Unreleased]: https://github.com/dsisnero/sync-map/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/dsisnero/sync-map/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/dsisnero/sync-map/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/dsisnero/sync-map/releases/tag/v0.1.1
