@@ -70,10 +70,12 @@ class Sync::XMap(K, V)
       }
     end
 
+    @[AlwaysInline]
     def load_meta : UInt64
       @meta.get(:acquire)
     end
 
+    @[AlwaysInline]
     def store_meta(val : UInt64)
       @meta.set(val, :release)
     end
@@ -87,16 +89,20 @@ class Sync::XMap(K, V)
       end
     end
 
+    @[AlwaysInline]
     def load_slot(idx : Int32) : Pointer(Void)
       @slots[idx].get(:acquire)
     end
 
+    @[AlwaysInline]
     def load_slot_unsafe(idx : Int32) : Pointer(Void)
       @slots.to_unsafe[idx].get(:acquire)
     end
 
+    @[AlwaysInline]
     def store_slot(idx : Int32, ptr : Pointer(Void))
       @slots[idx] = Atomic(Pointer(Void)).new(ptr)
+      Atomic.fence(:release)
     end
 
     # Insert a new entry into the first empty slot. Returns true on success.
@@ -138,6 +144,7 @@ class Sync::XMap(K, V)
     @table.set(Table(K, V).new(DEFAULT_MIN_LEN, @seed).as(Void*), :release)
   end
 
+  @[AlwaysInline]
   private def current_table : Table(K, V)
     @table.get(:acquire).as(Table(K, V))
   end
