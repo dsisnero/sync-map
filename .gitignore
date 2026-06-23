@@ -22,3 +22,6 @@ temp/
 # macOS metadata (AppleDouble + Finder)
 ._*
 .DS_Store
+
+# Worktree directories
+sync-map.*/
