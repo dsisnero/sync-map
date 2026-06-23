@@ -27,4 +27,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Project docs under `docs/` and quality gates via `make gates`.
 - Markdown linting wired into `make lint` via `rumdl fmt`.
 
+### Changed
+
+- `benchmarks/benchmarks.md`: regenerated multi-thread results as a
+  worker-scaling sweep (workers 2/4/8) with execution-context guidance,
+  per-backend usage (including a parallel-worker example), and load-based
+  backend recommendations.
+
+### Fixed
+
+- Benchmark harness now spawns MT workers on
+  `Fiber::ExecutionContext::Parallel` so the multi-thread sweep measures
+  true parallelism. Under `-Dpreview_mt -Dexecution_context` the default
+  execution context has capacity 1, so the previous plain-`spawn` MT
+  numbers reflected concurrency, not parallelism.
+
 [Unreleased]: https://github.com/dsisnero/sync-map

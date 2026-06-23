@@ -4,6 +4,7 @@
 require "../src/sync-map"
 require "../src/sync-map/hash_trie_map"
 require "../src/sync-map/xmap"
+require "wait_group"
 
 DEFAULT_SIZE    =   1_000
 DEFAULT_RUNS    =       5 # run 5 times, discard first (cold), average rest
@@ -18,6 +19,33 @@ MODE            = ENV["BENCH_MODE"]? || DEFAULT_MODE
 
 KEYS = (0...SIZE).to_a
 
+# MT workers must run on a real parallel context. With
+# `-Dpreview_mt -Dexecution_context` the *default* context has capacity 1
+# (single thread), so plain `spawn` measures concurrency, not parallelism.
+# We spawn workers onto an explicit `ExecutionContext::Parallel` so they run
+# on real OS threads and actually contend on the map.
+{% if flag?(:execution_context) %}
+  BENCH_CTX = WORKERS > 1 ? Fiber::ExecutionContext::Parallel.new("bench", WORKERS) : nil
+{% end %}
+
+macro bench_spawn(&block)
+  {% if flag?(:execution_context) %}
+    if ctx = BENCH_CTX
+      ctx.spawn do
+        {{ block.body }}
+      end
+    else
+      spawn do
+        {{ block.body }}
+      end
+    end
+  {% else %}
+    spawn do
+      {{ block.body }}
+    end
+  {% end %}
+end
+
 def measure_reads(map, iters, workers) : Int64
   return 0_i64 if iters <= 0
 
@@ -30,34 +58,27 @@ def measure_reads(map, iters, workers) : Int64
     return sink
   end
 
-  done = Channel(Int64).new
-  start = Channel(Nil).new
-  ready = Channel(Nil).new
+  total = Atomic(Int64).new(0)
   base_iters = iters // workers
   extra = iters % workers
+  wg = WaitGroup.new(workers)
 
   workers.times do |worker|
-    spawn do
-      local_iters = base_iters + (worker < extra ? 1 : 0)
-      offset = worker * base_iters
-      ready.send(nil)
-      start.receive
-
-      sink = 0_i64
+    local_iters = base_iters + (worker < extra ? 1 : 0)
+    offset = worker * base_iters
+    bench_spawn do
+      local = 0_i64
       local_iters.times do |i|
-        _, ok = map.load(KEYS[(offset + i) % SIZE])
-        sink &+= 1 if ok
+        _, ok = map.load(KEYS[((offset + i) % SIZE)])
+        local &+= 1 if ok
       end
-      done.send(sink)
+      total.add(local)
+      wg.done
     end
   end
 
-  workers.times { ready.receive }
-  workers.times { start.send(nil) }
-
-  sink = 0_i64
-  workers.times { sink &+= done.receive }
-  sink
+  wg.wait
+  total.get
 end
 
 def measure_mixed(map, iters, workers) : Int64
@@ -77,20 +98,16 @@ def measure_mixed(map, iters, workers) : Int64
     return sink
   end
 
-  done = Channel(Int64).new
-  start = Channel(Nil).new
-  ready = Channel(Nil).new
+  total = Atomic(Int64).new(0)
   base_iters = iters // workers
   extra = iters % workers
+  wg = WaitGroup.new(workers)
 
   workers.times do |worker|
-    spawn do
-      local_iters = base_iters + (worker < extra ? 1 : 0)
-      offset = worker * base_iters
-      ready.send(nil)
-      start.receive
-
-      sink = 0_i64
+    local_iters = base_iters + (worker < extra ? 1 : 0)
+    offset = worker * base_iters
+    bench_spawn do
+      local = 0_i64
       local_iters.times do |i|
         absolute_i = offset + i
         key = KEYS[absolute_i % SIZE]
@@ -98,19 +115,16 @@ def measure_mixed(map, iters, workers) : Int64
           map.store(key, absolute_i)
         else
           _, ok = map.load(key)
-          sink &+= 1 if ok
+          local &+= 1 if ok
         end
       end
-      done.send(sink)
+      total.add(local)
+      wg.done
     end
   end
 
-  workers.times { ready.receive }
-  workers.times { start.send(nil) }
-
-  sink = 0_i64
-  workers.times { sink &+= done.receive }
-  sink
+  wg.wait
+  total.get
 end
 
 def expected_sink(iters) : Int64
@@ -155,6 +169,9 @@ puts "=" * 55
 mode = {{ flag?(:preview_mt) ? "MT (multi-thread)" : "ST (single-thread)" }}
 puts "Concurrent Map Benchmark — #{mode}"
 puts "size=#{SIZE}, iters=#{ITERS}, runs=#{RUNS}, workers=#{WORKERS}, bench_mode=#{MODE}"
+{% if flag?(:execution_context) %}
+  puts "default_ctx_capacity=#{Fiber::ExecutionContext.default.capacity}, bench_ctx_capacity=#{BENCH_CTX.try(&.capacity) || 1}"
+{% end %}
 puts "=" * 55
 
 label = MODE == "mixed" ? "87.5% Reads / 12.5% Writes, Int Keys:" : "100% Reads, Int Keys:"
