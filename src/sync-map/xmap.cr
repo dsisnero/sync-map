@@ -144,7 +144,11 @@ class Sync::XMap(K, V)
 
   @[AlwaysInline]
   private def h(key : K) : UInt64
-    key.hash.to_u64 ^ @seed
+    {% if K == Int32 || K == Int64 || K == UInt32 || K == UInt64 %}
+      key.to_u64 ^ @seed
+    {% else %}
+      key.hash.to_u64 ^ @seed
+    {% end %}
   end
 
   # --- Public API ---
