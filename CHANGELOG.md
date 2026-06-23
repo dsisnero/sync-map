@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-06-23
+
 ### Added
 
 - `Sync::Map(K, V)` — thread-safe concurrent map backed by
@@ -42,4 +44,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   execution context has capacity 1, so the previous plain-`spawn` MT
   numbers reflected concurrency, not parallelism.
 
-[Unreleased]: https://github.com/dsisnero/sync-map
+[Unreleased]: https://github.com/dsisnero/sync-map/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/dsisnero/sync-map/releases/tag/v0.1.1
