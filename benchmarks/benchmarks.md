@@ -93,7 +93,16 @@ If `bench_ctx_capacity` is 1, you are not measuring parallelism.
 ## Results — Size Sweep
 
 Measured 2026-06-23. `iters=500000`, `runs=5` (first discarded, last 4
-averaged), `Int32 => Int32` keys. Throughput in millions of ops/s (M).
+averaged), `Int32 => Int32` keys.
+
+**Reading the results.** Every figure is **throughput in millions of
+operations per second** (M ops/s) — how many successful map operations
+(`load`s, plus `store`s in the mixed workload) complete per second. A cell
+of `35.3` means 35.3 million ops/s, and **higher is better**. Each figure is
+`iters ÷ average wall-clock` over the 4 timed runs. MT figures are
+*aggregate* throughput: the fixed `iters` total is split across all workers,
+so a value that stays flat as workers increase means adding threads did not
+increase total work done per second.
 
 ### ST — single thread (`workers=1`)
 
@@ -136,6 +145,64 @@ Each cell shows throughput at **workers = 2 / 4 / 8**.
 | 1k   | 22.7 / 27.6 / 36.3 | 16.8 / 20.1 / 15.8 | 29.9 / 29.8 / 36.4 |
 | 10k  | 23.4 / 30.9 / 25.5 | 8.94 / 6.59 / 10.4 | 4.90 / 4.26 / 4.81 |
 | 100k | 8.58 / 11.7 / 10.0 | 2.67 / 3.73 / 2.57 | 0.27 / 0.50 / 0.66 |
+
+## Charts
+
+Bar length is proportional to throughput (M ops/s); longer is faster.
+
+Throughput collapses as the map grows — `XMap` falls off a cliff past 10k,
+`HashTrieMap` degrades steadily, `Sync::Map` stays the most stable:
+
+```text
+ST, 100% reads — throughput by map size      (each # ~= 2 M ops/s)
+
+ size=100   Sync::Map   38.4  ###################
+            HashTrieMap 80.9  ########################################
+            XMap        70.6  ###################################
+ size=1k    Sync::Map   34.7  #################
+            HashTrieMap 52.2  ##########################
+            XMap        40.8  ####################
+ size=10k   Sync::Map   33.7  #################
+            HashTrieMap 26.7  #############
+            XMap         4.78 ##
+ size=100k  Sync::Map   18.8  #########
+            HashTrieMap  5.18 ###
+            XMap         0.16 .
+```
+
+Adding workers does *not* speed things up on a single shared map —
+throughput is essentially flat from 2 to 8 workers:
+
+```text
+MT, 100% reads, size=1k — throughput by workers   (each # ~= 2 M ops/s)
+
+ Sync::Map    w2 32.4  ################
+              w4 35.3  ##################
+              w8 32.7  ################
+ HashTrieMap  w2 32.4  ################
+              w4 39.3  ####################
+              w8 35.5  ##################
+ XMap         w2 34.9  #################
+              w4 34.7  #################
+              w8 35.4  ##################
+```
+
+The size cliff persists under parallelism: at 100k entries every backend is
+far slower and `XMap` is effectively unusable, regardless of worker count:
+
+```text
+MT, 100% reads, size=100k — throughput by workers (each # ~= 2 M ops/s)
+
+ Sync::Map    w2 14.9  #######
+              w4 10.8  #####
+              w8 10.0  #####
+ HashTrieMap  w2  4.25 ##
+              w4  7.76 ####
+              w8  4.87 ##
+ XMap         w2  0.28 .
+              w4  0.63 .
+              w8  0.42 .
+```
 
 ## What the Numbers Mean
 

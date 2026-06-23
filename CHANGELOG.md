@@ -11,7 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- `Sync::Map::VERSION` now matches `shard.yml` (was pinned at `0.1.0`).
+- `Sync::Map::VERSION` now matches `shard.yml` and is derived from it at
+  compile time, so it can no longer drift from the packaged version.
+
+### Changed
+
+- Benchmark docs: clarified the throughput metric (M ops/s) and added charts
+  showing how throughput changes with map size and worker count.
 
 ## [0.1.1] - 2026-06-23
 

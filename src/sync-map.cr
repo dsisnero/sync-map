@@ -15,7 +15,8 @@ require "sync/rw_lock"
 class Sync::Map(K, V)
   include Enumerable({K, V})
 
-  VERSION = "0.1.2"
+  # Single source of truth: read the version from shard.yml at compile time.
+  VERSION = {{ read_file("#{__DIR__}/../shard.yml").lines.find(&.starts_with?("version:")).split(":")[1].strip }}
 
   # Operations for the `compute` method, matching xsync.ComputeOp.
   enum ComputeOp
