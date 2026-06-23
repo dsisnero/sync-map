@@ -7,6 +7,7 @@
 #
 # Upstream: vendor/xsync/map.go (880af08)
 require "sync/mutex"
+require "sync/rw_lock"
 
 class Sync::XMap(K, V)
   ENTRIES_PER_BUCKET =    5
@@ -125,6 +126,7 @@ class Sync::XMap(K, V)
   @table : Atomic(Pointer(Void))
   @seed : UInt64
   @size = Atomic(Int64).new(0_i64)
+  @resize_rw = Sync::RWLock.new(:unchecked)
 
   def initialize
     @seed = Random::Secure.rand(UInt64)
@@ -175,21 +177,111 @@ class Sync::XMap(K, V)
 
   def store(key : K, value : V) : Nil
     h = hash_with_seed(key)
-    table = current_table
+    @resize_rw.read {
+      do_store(current_table, key, value, h)
+    }
+    maybe_resize(current_table)
+  end
+
+  def delete(key : K) : Nil
+    load_and_delete(key)
+  end
+
+  def load_and_delete(key : K) : {V?, Bool}
+    h = hash_with_seed(key)
+    @resize_rw.read {
+      do_load_and_delete(current_table, key, h)
+    }
+  end
+
+  def clear : Nil
+    @resize_rw.write {
+      @table.set(Table(K, V).new(DEFAULT_MIN_LEN, @seed).as(Void*), :release)
+      @size.set(0_i64, :release)
+    }
+  end
+
+  def size : Int32
+    @size.get(:acquire).to_i32
+  end
+
+  def each(& : K, V -> _) : Nil
+    @resize_rw.read {
+      table = current_table
+      table.buckets.each do |rootb|
+        snapshot = [] of {K, V}
+        rootb.mu.synchronize do
+          b = rootb
+          loop do
+            ENTRIES_PER_BUCKET.times do |idx|
+              eptr = b.load_slot(idx)
+              if eptr.address != 0
+                e = eptr.as(Entry(K, V))
+                snapshot << {e.key, e.value}
+              end
+            end
+            nb = b.next_bucket
+            break unless nb
+            b = nb
+          end
+        end
+        snapshot.each { |k, v| yield(k, v) }
+      end
+    }
+  end
+
+  # --- Resize ---
+
+  private def resize_threshold(table : Table)
+    (table.buckets.size * ENTRIES_PER_BUCKET * LOAD_FACTOR).to_i
+  end
+
+  # Called after every store. May double the bucket count.
+  private def maybe_resize(old : Table) : Nil
+    return if size <= resize_threshold(old)
+    @resize_rw.write {
+      t = current_table
+      return unless t.same?(old) || t.buckets.size <= old.buckets.size
+      return if size <= resize_threshold(t)
+      resize_grow(t)
+    }
+  end
+
+  private def resize_grow(old_table : Table(K, V)) : Nil
+    new_len = old_table.buckets.size * 2
+    new_table = Table(K, V).new(new_len, @seed)
+    old_table.buckets.each do |rootb|
+      rootb.mu.synchronize do
+        b = rootb
+        while b
+          meta = b.load_meta
+          ENTRIES_PER_BUCKET.times do |idx|
+            byte_bit = 0x80_u64 << (idx << 3)
+            next if meta & byte_bit == 0
+            eptr = b.load_slot(idx)
+            next if eptr.address == 0
+            e = eptr.as(Entry(K, V))
+            h_new = hash_with_seed(e.key)
+            insert_into_table(new_table, h_new, e.key, e.value)
+          end
+          b = b.next_bucket
+        end
+      end
+    end
+    @table.set(new_table.as(Void*), :release)
+  end
+
+  private def do_store(table : Table(K, V), key : K, value : V, h : UInt64) : Nil
     bidx = (Sync::XMap.h1(h) & (table.buckets.size - 1)).to_i
     rootb = table.buckets[bidx]
-
     rootb.mu.lock
     b = rootb
     h2 = Sync::XMap.h2(h)
     entry_ptr = Entry(K, V).new(key, value).as(Void*)
-
     loop do
       meta = b.load_meta
       h2w = Sync::XMap.broadcast(h2)
       marked = Sync::XMap.mark_zero_bytes(meta ^ h2w)
-
-      # Check for existing key
       while marked != 0
         idx = Sync::XMap.first_marked_byte_index(marked)
         if idx < ENTRIES_PER_BUCKET
@@ -202,15 +294,11 @@ class Sync::XMap(K, V)
         end
         marked &= marked &- 1
       end
-
-      # Try insert into empty slot
       if b.insert(h2, entry_ptr)
         @size.add(1, :release)
         rootb.mu.unlock
         return
       end
-
-      # Overflow — create new bucket
       unless nb = b.next_bucket
         nb = Bucket(K, V).new
         nb.insert(h2, entry_ptr)
@@ -223,20 +311,12 @@ class Sync::XMap(K, V)
     end
   end
 
-  def delete(key : K) : Nil
-    load_and_delete(key)
-  end
-
-  def load_and_delete(key : K) : {V?, Bool}
-    h = hash_with_seed(key)
-    table = current_table
+  private def do_load_and_delete(table : Table(K, V), key : K, h : UInt64) : {V?, Bool}
     bidx = (Sync::XMap.h1(h) & (table.buckets.size - 1)).to_i
     rootb = table.buckets[bidx]
-
     rootb.mu.lock
     b = rootb
     h2w = Sync::XMap.broadcast(Sync::XMap.h2(h))
-
     loop do
       meta = b.load_meta
       marked = Sync::XMap.mark_zero_bytes(meta ^ h2w)
@@ -263,35 +343,28 @@ class Sync::XMap(K, V)
     {nil, false}
   end
 
-  def clear : Nil
-    @table.set(Table(K, V).new(DEFAULT_MIN_LEN, @seed).as(Void*), :release)
-    @size.set(0_i64, :release)
-  end
-
-  def size : Int32
-    @size.get(:acquire).to_i32
-  end
-
-  def each(& : K, V -> _) : Nil
-    table = current_table
-    table.buckets.each do |rootb|
-      snapshot = [] of {K, V}
-      rootb.mu.synchronize do
-        b = rootb
-        loop do
-          ENTRIES_PER_BUCKET.times do |idx|
-            eptr = b.load_slot(idx)
-            if eptr.address != 0
-              e = eptr.as(Entry(K, V))
-              snapshot << {e.key, e.value}
-            end
-          end
-          nb = b.next_bucket
-          break unless nb
-          b = nb
-        end
+  # Insert into a specific table during resize (no resize recursion, no
+  # size delta — the size atomics are handled by the caller).
+  private def insert_into_table(table : Table(K, V), h : UInt64, key : K, value : V) : Nil
+    bidx = (Sync::XMap.h1(h) & (table.buckets.size - 1)).to_i
+    rootb = table.buckets[bidx]
+    rootb.mu.lock
+    b = rootb
+    h2 = Sync::XMap.h2(h)
+    entry_ptr = Entry(K, V).new(key, value).as(Void*)
+    loop do
+      if b.insert(h2, entry_ptr)
+        rootb.mu.unlock
+        return
       end
-      snapshot.each { |k, v| yield(k, v) }
+      unless nb = b.next_bucket
+        nb = Bucket(K, V).new
+        nb.insert(h2, entry_ptr)
+        b.next_bucket = nb
+        rootb.mu.unlock
+        return
+      end
+      b = nb
     end
   end
 end
