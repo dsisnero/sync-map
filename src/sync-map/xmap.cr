@@ -163,7 +163,7 @@ class Sync::XMap(K, V)
       while marked != 0
         idx = Sync::XMap.first_marked_byte_index(marked)
         return {nil, false} if idx >= ENTRIES_PER_BUCKET
-        eptr = b.load_slot(idx)
+        eptr = b.load_slot_unsafe(idx)
         if eptr.address != 0
           e = eptr.as(Entry(K, V))
           return {e.value, true} if e.key == key
