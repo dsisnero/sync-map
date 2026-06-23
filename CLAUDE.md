@@ -32,10 +32,14 @@ make clean
 
 ## Architecture
 
-- `src/sync-map.cr` — `Sync::Map(K, V)` with `Sync::Mutex(:unchecked)` +
+- `src/sync-map.cr` — `Sync::Map(K, V)` with `Sync::RWLock(:unchecked)` +
   `Hash(K,V)` backing. Snapshot-based iteration. Includes `Enumerable({K,V})`.
-- `spec/sync-map_spec.cr` — 154 specs covering Go parity, Crystal Hash parity,
-  xsync extended API, and MT-safety.
+- `src/sync-map/hash_trie_map.cr` — `Sync::HashTrieMap(K, V)`, lock-free-read
+  hash trie backend.
+- `src/sync-map/xmap.cr` — `Sync::XMap(K, V)`, CLHT (cache-line hash table)
+  backend.
+- `spec/` — specs per backend plus a shared concurrent-map contract, covering
+  Go parity, Crystal Hash parity, xsync extended API, and MT-safety.
 - `vendor/go` — upstream Go source (sync.Map reference)
 - `vendor/xsync` — upstream xsync source (best performer in benchmarks)
 

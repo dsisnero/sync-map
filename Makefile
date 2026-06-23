@@ -13,6 +13,7 @@ format-check:
 
 lint:
 	ameba src spec
+	rumdl fmt .
 
 test:
 	crystal spec

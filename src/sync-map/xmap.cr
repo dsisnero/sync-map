@@ -275,21 +275,23 @@ class Sync::XMap(K, V)
   def each(& : K, V -> _) : Nil
     table = current_table
     table.buckets.each do |rootb|
-      b = rootb
-      rootb.mu.lock
-      loop do
-        ENTRIES_PER_BUCKET.times do |idx|
-          eptr = b.load_slot(idx)
-          if eptr.address != 0
-            e = eptr.as(Entry(K, V))
-            return unless yield(e.key, e.value)
+      snapshot = [] of {K, V}
+      rootb.mu.synchronize do
+        b = rootb
+        loop do
+          ENTRIES_PER_BUCKET.times do |idx|
+            eptr = b.load_slot(idx)
+            if eptr.address != 0
+              e = eptr.as(Entry(K, V))
+              snapshot << {e.key, e.value}
+            end
           end
+          nb = b.next_bucket
+          break unless nb
+          b = nb
         end
-        nb = b.next_bucket
-        break unless nb
-        b = nb
       end
-      rootb.mu.unlock
+      snapshot.each { |k, v| yield(k, v) }
     end
   end
 end

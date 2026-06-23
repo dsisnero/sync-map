@@ -18,22 +18,22 @@ crystal spec spec/sync-map_spec.cr -e "MT-safety"
 
 ## Test Structure
 
-- `spec/sync-map_spec.cr` — 154 specs organized by feature area
+- `spec/sync-map_spec.cr` — `Sync::Map` API, organized by feature area
+- `spec/hash_trie_map_spec.cr` — `Sync::HashTrieMap` backend
+- `spec/xmap_spec.cr` — `Sync::XMap` (CLHT) backend
+- `spec/concurrent_map_contract_spec.cr` — shared concurrent-map contract
 - `spec/spec_helper.cr` — test setup, requires `spec` and `../src/sync-map`
 
 ## Spec Categories
 
-| Category | Count | Purpose |
-|----------|-------|---------|
-| Core API | 30 | Go sync.Map parity + Crystal idiomatic |
-| Hash parity | 45 | Crystal Hash method coverage |
-| xsync extended | 10 | Compute, delete_matching, load_or_compute |
-| Enumerable | 6 | all?, any?, find, map, count |
-| Concurrency | 15 | Atomic operations under contention |
-| Snapshot iteration | 6 | each/each_key/each_value consistency |
-| Block-under-lock | 13 | select, reject, transform, merge, invert, compact |
-| Snapshot safety | 2 | each_key/each_value re-entrant calls |
-| Stats + iterators | 6 | Stats, block-less iterator returns |
+- Core API — Go sync.Map parity + Crystal idiomatic
+- Hash parity — Crystal Hash method coverage
+- xsync extended — compute, delete_matching, load_or_compute
+- Enumerable — all?, any?, find, map, count
+- Concurrency — atomic operations under contention
+- Snapshot iteration — each/each_key/each_value consistency
+- Block-under-lock — select, reject, transform, merge, invert, compact
+- Stats + iterators — stats, block-less iterator returns
 
 ## Concurrency Testing
 

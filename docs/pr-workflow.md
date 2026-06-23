@@ -16,7 +16,7 @@ make test-mt
 
 Follow conventional commits:
 
-```
+```text
 feat: description           # new feature
 fix: description            # bug fix
 perf: description           # performance improvement

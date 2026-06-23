@@ -5,20 +5,30 @@
 require "sync/mutex"
 
 class Sync::HashTrieMap(K, V)
-  BITS = 5_u32; SIZE = 32; MASK = SIZE - 1
-  MAX_DEPTH = 2
+  BITS = 5_u32; SIZE = 32; MASK      = SIZE - 1
+  MAX_DEPTH =  2
+
+  private class EntriesBox(K, V)
+    getter entries : Array({K, V})
+
+    def initialize(@entries : Array({K, V}))
+    end
+  end
 
   private class Node(K, V)
     getter mu = Sync::Mutex.new(:unchecked)
     @children : StaticArray(Atomic(Pointer(Void)), SIZE)
-    property entries : Array({K, V}) = [] of {K, V}
-    property levels : Int32  # depth from root: 0=root, 1=child, ... MAX_DEPTH=leaf
+    property levels : Int32 # depth from root: 0=root, 1=child, ... MAX_DEPTH=leaf
+    @entries : Atomic(Pointer(Void))
 
     def initialize(@levels : Int32)
       @children = StaticArray(Atomic(Pointer(Void)), SIZE).new { Atomic(Pointer(Void)).new(Pointer(Void).null) }
+      @entries = Atomic(Pointer(Void)).new(EntriesBox(K, V).new([] of {K, V}).as(Void*))
     end
 
-    def leaf?; @levels >= MAX_DEPTH; end
+    def leaf?
+      @levels >= MAX_DEPTH
+    end
 
     def load_child(idx : Int32) : Pointer(Void)
       @children[idx].get(:acquire)
@@ -26,6 +36,14 @@ class Sync::HashTrieMap(K, V)
 
     def store_child(idx : Int32, ptr : Pointer(Void))
       @children[idx] = Atomic(Pointer(Void)).new(ptr)
+    end
+
+    def load_entries : Array({K, V})
+      @entries.get(:acquire).as(EntriesBox(K, V)).entries
+    end
+
+    def store_entries(entries : Array({K, V}))
+      @entries.set(EntriesBox(K, V).new(entries).as(Void*), :release)
     end
   end
 
@@ -38,8 +56,13 @@ class Sync::HashTrieMap(K, V)
     @root.set(Node(K, V).new(0).as(Void*), :release)
   end
 
-  private def hash(key : K) : UInt64; key.hash.to_u64 ^ @seed; end
-  private def as_node(p : Pointer(Void)) : Node(K, V); p.as(Node(K, V)); end
+  private def hash(key : K) : UInt64
+    key.hash.to_u64 ^ @seed
+  end
+
+  private def as_node(p : Pointer(Void)) : Node(K, V)
+    p.as(Node(K, V))
+  end
 
   # Descend from node to leaf for hash h, creating children as needed.
   # Returns the leaf node (locked).
@@ -71,70 +94,146 @@ class Sync::HashTrieMap(K, V)
 
   def load(key : K) : {V?, Bool}
     h = hash(key)
-    node = as_node(@root.get(:acquire))
-    while !node.leaf?
-      shift = ((MAX_DEPTH - node.levels) * BITS).to_u32
-      idx = ((h >> (shift - BITS)) & MASK).to_i
-      child = node.load_child(idx)
-      return {nil, false} if child.address == 0
-      node = as_node(child)
-    end
-    node.entries.each { |(k, v)| return {v, true} if k == key }
+    # Hot path specialized for MAX_DEPTH=2: root -> internal -> leaf.
+    root = as_node(@root.get(:acquire))
+    child = root.load_child(((h >> BITS) & MASK).to_i)
+    return {nil, false} if child.address == 0
+
+    leaf = as_node(child).load_child((h & MASK).to_i)
+    return {nil, false} if leaf.address == 0
+
+    as_node(leaf).load_entries.each { |(k, v)| return {v, true} if k == key }
     {nil, false}
   end
 
   def store(key : K, value : V) : Nil
     h = hash(key)
     leaf = descend(as_node(@root.get(:acquire)), h)
-    leaf.entries.each_with_index { |(k, _), i| if k == key; leaf.entries[i] = {key, value}; leaf.mu.unlock; return; end }
-    leaf.entries << {key, value}
-    leaf.mu.unlock
+    begin
+      entries = leaf.load_entries.dup
+      entries.each_with_index do |(k, _), i|
+        if k == key
+          entries[i] = {key, value}
+          leaf.store_entries(entries)
+          return
+        end
+      end
+      entries << {key, value}
+      leaf.store_entries(entries)
+    ensure
+      leaf.mu.unlock
+    end
   end
 
   def swap(key : K, nv : V) : {V?, Bool}
     h = hash(key)
     leaf = descend(as_node(@root.get(:acquire)), h)
-    leaf.entries.each_with_index { |(k, _), i| if k == key; old = leaf.entries[i][1]; leaf.entries[i] = {key, nv}; leaf.mu.unlock; return {old, true}; end }
-    leaf.entries << {key, nv}
-    leaf.mu.unlock; {nil, false}
+    begin
+      entries = leaf.load_entries.dup
+      entries.each_with_index do |(k, _), i|
+        if k == key
+          old = entries[i][1]
+          entries[i] = {key, nv}
+          leaf.store_entries(entries)
+          return {old, true}
+        end
+      end
+      entries << {key, nv}
+      leaf.store_entries(entries)
+      {nil, false}
+    ensure
+      leaf.mu.unlock
+    end
   end
 
   def delete(key : K) : Nil
     h = hash(key)
     leaf = descend(as_node(@root.get(:acquire)), h)
-    leaf.mu.lock
-    leaf.entries.each_with_index { |(k, _), i| if k == key; leaf.entries.delete_at(i); leaf.mu.unlock; return; end }
-    leaf.mu.unlock
+    begin
+      entries = leaf.load_entries.dup
+      entries.each_with_index do |(k, _), i|
+        if k == key
+          entries.delete_at(i)
+          leaf.store_entries(entries)
+          return
+        end
+      end
+    ensure
+      leaf.mu.unlock
+    end
   end
 
   def load_or_store(key : K, value : V) : {V?, Bool}
     h = hash(key)
     leaf = descend(as_node(@root.get(:acquire)), h)
-    leaf.entries.each_with_index { |(k, _), i| if k == key; v = leaf.entries[i][1]; leaf.mu.unlock; return {v, true}; end }
-    leaf.entries << {key, value}
-    leaf.mu.unlock; {nil, false}
+    begin
+      entries = leaf.load_entries.dup
+      entries.each_with_index do |(k, _), i|
+        if k == key
+          return {entries[i][1], true}
+        end
+      end
+      entries << {key, value}
+      leaf.store_entries(entries)
+      {nil, false}
+    ensure
+      leaf.mu.unlock
+    end
   end
 
   def load_and_delete(key : K) : {V?, Bool}
     h = hash(key)
     leaf = descend(as_node(@root.get(:acquire)), h)
-    leaf.mu.lock
-    leaf.entries.each_with_index { |(k, _), i| if k == key; v = leaf.entries[i][1]; leaf.entries.delete_at(i); leaf.mu.unlock; return {v, true}; end }
-    leaf.mu.unlock; {nil, false}
+    begin
+      entries = leaf.load_entries.dup
+      entries.each_with_index do |(k, _), i|
+        if k == key
+          v = entries[i][1]
+          entries.delete_at(i)
+          leaf.store_entries(entries)
+          return {v, true}
+        end
+      end
+      {nil, false}
+    ensure
+      leaf.mu.unlock
+    end
   end
 
   def compare_and_swap(key : K, ov : V, nv : V) : Bool
     h = hash(key)
     leaf = descend(as_node(@root.get(:acquire)), h)
-    leaf.entries.each_with_index { |(k, v), i| if k == key && v == ov; leaf.entries[i] = {key, nv}; leaf.mu.unlock; return true; end }
-    leaf.mu.unlock; false
+    begin
+      entries = leaf.load_entries.dup
+      entries.each_with_index do |(k, v), i|
+        if k == key && v == ov
+          entries[i] = {key, nv}
+          leaf.store_entries(entries)
+          return true
+        end
+      end
+      false
+    ensure
+      leaf.mu.unlock
+    end
   end
 
   def compare_and_delete(key : K, ov : V) : Bool
     h = hash(key)
     leaf = descend(as_node(@root.get(:acquire)), h)
-    leaf.entries.each_with_index { |(k, v), i| if k == key && v == ov; leaf.entries.delete_at(i); leaf.mu.unlock; return true; end }
-    leaf.mu.unlock; false
+    begin
+      entries = leaf.load_entries.dup
+      entries.each_with_index do |(k, v), i|
+        if k == key && v == ov
+          entries.delete_at(i)
+          leaf.store_entries(entries)
+          return true
+        end
+      end
+      false
+    ensure
+      leaf.mu.unlock
+    end
   end
 
   def clear : Nil
@@ -145,7 +244,7 @@ class Sync::HashTrieMap(K, V)
     stack = [as_node(@root.get(:acquire))]
     while n = stack.pop?
       if n.leaf?
-        n.entries.each { |(k, v)| return unless yield(k, v) }
+        n.load_entries.each { |(k, v)| yield(k, v) }
       else
         SIZE.times { |j| c = n.load_child(j); stack.push(as_node(c)) if c.address != 0 }
       end

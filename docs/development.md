@@ -9,6 +9,7 @@ shards install
 ```
 
 Initialize submodules (upstream Go sources for reference):
+
 ```bash
 git submodule update --init --depth 1
 ```
@@ -22,6 +23,7 @@ make gates
 ```
 
 Individual gate commands:
+
 ```bash
 make format-check   # crystal tool format --check src spec
 make lint           # ameba src spec

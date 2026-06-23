@@ -1,13 +1,13 @@
-require "sync/mutex"
+require "sync/rw_lock"
 
 # A thread-safe map (Hash) that is safe for concurrent use
 # by multiple fibers without additional locking or coordination.
 #
 # The API mirrors Go's `sync.Map` with Crystal-idiomatic aliases.
 #
-# Uses Sync::Mutex(:unchecked) — a fast nsync-style mutex (cosmopolitan/nsync
-# adaptation) with no deadlock detection overhead. Safe because Sync::Map
-# never locks recursively and always properly pairs lock/unlock.
+# Uses Sync::RWLock(:unchecked) so read-only operations can proceed concurrently
+# while writes stay exclusive. Safe because Sync::Map never upgrades locks and
+# always properly pairs read/write lock and unlock operations.
 #
 # Upstream sources:
 # - Go stdlib sync.Map: vendor/go/src/sync/map.go (Go 1.24+, HashTrieMap-backed)
@@ -25,12 +25,20 @@ class Sync::Map(K, V)
   end
 
   @hash = Hash(K, V).new
-  @mu = Sync::Mutex.new(:unchecked)
+  @mu = Sync::RWLock.new(:unchecked)
 
   # Returns the zero/default value of type V.
   private def default_value : V
     v = uninitialized V
     v
+  end
+
+  private def read_sync(& : -> _)
+    @mu.read { yield }
+  end
+
+  private def write_sync(& : -> _)
+    @mu.write { yield }
   end
 
   def initialize
@@ -48,29 +56,29 @@ class Sync::Map(K, V)
   # Returns the value stored in the map for a key, or zero value if absent.
   # The ok result indicates whether value was found in the map.
   def load(key : K) : {V, Bool}
-    @mu.synchronize { @hash[key]?.try { |v| {v, true} } || {default_value, false} }
+    read_sync { @hash[key]?.try { |v| {v, true} } || {default_value, false} }
   end
 
   # Sets the value for a key.
   def store(key : K, value : V) : Nil
-    @mu.synchronize { @hash[key] = value }
+    write_sync { @hash[key] = value }
   end
 
   # Deletes the value for a key. Does nothing if the key is absent.
   def delete(key : K) : Nil
-    @mu.synchronize { @hash.delete(key) }
+    write_sync { @hash.delete(key) }
   end
 
   # Deletes all entries, resulting in an empty map.
   def clear : Nil
-    @mu.synchronize { @hash.clear }
+    write_sync { @hash.clear }
   end
 
   # Returns the existing value for the key if present.
   # Otherwise, stores and returns the given value.
   # The loaded result is true if the value was loaded, false if stored.
   def load_or_store(key : K, value : V) : {V, Bool}
-    @mu.synchronize do
+    write_sync do
       if @hash.has_key?(key)
         {@hash[key], true}
       else
@@ -83,7 +91,7 @@ class Sync::Map(K, V)
   # Deletes the value for a key, returning the previous value if any.
   # The loaded result reports whether the key was present.
   def load_and_delete(key : K) : {V, Bool}
-    @mu.synchronize do
+    write_sync do
       if @hash.has_key?(key)
         value = @hash[key]
         @hash.delete(key)
@@ -98,7 +106,7 @@ class Sync::Map(K, V)
   # The loaded result reports whether the key was present.
   # When the key is absent, stores the value and returns loaded=false.
   def swap(key : K, value : V) : {V, Bool}
-    @mu.synchronize do
+    write_sync do
       if @hash.has_key?(key)
         previous = @hash[key]
         @hash[key] = value
@@ -112,7 +120,7 @@ class Sync::Map(K, V)
 
   # Swaps old and new values for key if the current value equals old.
   def compare_and_swap(key : K, old : V, new : V) : Bool
-    @mu.synchronize do
+    write_sync do
       if @hash.has_key?(key) && @hash[key] == old
         @hash[key] = new
         true
@@ -125,7 +133,7 @@ class Sync::Map(K, V)
   # Deletes the entry for key if its value equals old.
   # If there is no current value for key, returns false.
   def compare_and_delete(key : K, old : V) : Bool
-    @mu.synchronize do
+    write_sync do
       if @hash.has_key?(key) && @hash[key] == old
         @hash.delete(key)
         true
@@ -137,55 +145,55 @@ class Sync::Map(K, V)
 
   # Returns the number of entries in the map.
   def size : Int32
-    @mu.synchronize { @hash.size }
+    read_sync { @hash.size }
   end
 
   # Returns true if the map is empty.
   def empty? : Bool
-    @mu.synchronize { @hash.empty? }
+    read_sync { @hash.empty? }
   end
 
   # Returns true if the key is present.
   def has_key?(key : K) : Bool
-    @mu.synchronize { @hash.has_key?(key) }
+    read_sync { @hash.has_key?(key) }
   end
 
   # Returns all keys.
   def keys : Array(K)
-    @mu.synchronize { @hash.keys }
+    read_sync { @hash.keys }
   end
 
   # Returns all values.
   def values : Array(V)
-    @mu.synchronize { @hash.values }
+    read_sync { @hash.values }
   end
 
   # --- Crystal Hash parity ---
 
   # Returns true if the value is present.
   def has_value?(val : V) : Bool
-    @mu.synchronize { @hash.has_value?(val) }
+    read_sync { @hash.has_value?(val) }
   end
 
   # Returns the key for the given value. Raises KeyError if absent.
   def key_for(value : V) : K
-    @mu.synchronize { @hash.key_for(value) }
+    read_sync { @hash.key_for(value) }
   end
 
   # Returns the key for value, or yields the value to the block if absent.
   def key_for(value : V, & : V -> K) : K
-    @mu.synchronize { @hash.key_for(value) { |v| yield v } }
+    read_sync { @hash.key_for(value) { |v| yield v } }
   end
 
   # Returns the key for the given value, or nil if absent.
   def key_for?(value : V) : K?
-    @mu.synchronize { @hash.key_for?(value) }
+    read_sync { @hash.key_for?(value) }
   end
 
   # If the key is absent, stores the value and returns it.
   # If the key is present, returns the existing value.
   def put_if_absent(key : K, value : V) : V
-    @mu.synchronize do
+    write_sync do
       if @hash.has_key?(key)
         @hash[key]
       else
@@ -198,7 +206,7 @@ class Sync::Map(K, V)
   # If the key is absent, calls the block, stores the result, and returns it.
   # If the key is present, returns the existing value.
   def put_if_absent(key : K, & : K -> V) : V
-    @mu.synchronize do
+    write_sync do
       if @hash.has_key?(key)
         @hash[key]
       else
@@ -211,7 +219,7 @@ class Sync::Map(K, V)
 
   # Removes and returns the first key-value pair. Raises IndexError if empty.
   def shift : {K, V}
-    @mu.synchronize do
+    write_sync do
       if @hash.empty?
         raise IndexError.new("shift from empty map")
       end
@@ -224,7 +232,7 @@ class Sync::Map(K, V)
 
   # Removes and returns the first key-value pair, or nil if empty.
   def shift? : {K, V}?
-    @mu.synchronize do
+    write_sync do
       if @hash.empty?
         nil
       else
@@ -238,7 +246,7 @@ class Sync::Map(K, V)
 
   # Returns a shallow copy of the map.
   def dup : Sync::Map(K, V)
-    @mu.synchronize do
+    read_sync do
       copy = Sync::Map(K, V).new
       @hash.each { |k, v| copy.unsafe_store(k, v) }
       copy
@@ -247,7 +255,7 @@ class Sync::Map(K, V)
 
   # Merges entries from another Hash into this map, overwriting existing keys.
   def merge!(other : Hash(K, V)) : self
-    @mu.synchronize do
+    write_sync do
       other.each { |k, v| @hash[k] = v }
     end
     self
@@ -255,7 +263,7 @@ class Sync::Map(K, V)
 
   # Returns a new map with entries for which the block returns true.
   def select(& : K, V -> _) : Sync::Map(K, V)
-    @mu.synchronize do
+    read_sync do
       copy = Sync::Map(K, V).new
       @hash.each do |k, v|
         copy.unsafe_store(k, v) if yield(k, v)
@@ -266,7 +274,7 @@ class Sync::Map(K, V)
 
   # Returns a new map with entries for which the block returns false.
   def reject(& : K, V -> _) : Sync::Map(K, V)
-    @mu.synchronize do
+    read_sync do
       copy = Sync::Map(K, V).new
       @hash.each do |k, v|
         copy.unsafe_store(k, v) unless yield(k, v)
@@ -277,42 +285,42 @@ class Sync::Map(K, V)
 
   # Returns the first key in the map.
   def first_key : K
-    @mu.synchronize { @hash.first_key }
+    read_sync { @hash.first_key }
   end
 
   # Returns the first key, or nil if empty.
   def first_key? : K?
-    @mu.synchronize { @hash.first_key? }
+    read_sync { @hash.first_key? }
   end
 
   # Returns the last key in the map.
   def last_key : K
-    @mu.synchronize { @hash.last_key }
+    read_sync { @hash.last_key }
   end
 
   # Returns the last key, or nil if empty.
   def last_key? : K?
-    @mu.synchronize { @hash.last_key? }
+    read_sync { @hash.last_key? }
   end
 
   # Returns the first value in the map.
   def first_value : V
-    @mu.synchronize { @hash.first_value }
+    read_sync { @hash.first_value }
   end
 
   # Returns the first value, or nil if empty.
   def first_value? : V?
-    @mu.synchronize { @hash.first_value? }
+    read_sync { @hash.first_value? }
   end
 
   # Returns the last value in the map.
   def last_value : V
-    @mu.synchronize { @hash.last_value }
+    read_sync { @hash.last_value }
   end
 
   # Returns the last value, or nil if empty.
   def last_value? : V?
-    @mu.synchronize { @hash.last_value? }
+    read_sync { @hash.last_value? }
   end
 
   # --- xsync extended API ---
@@ -322,7 +330,7 @@ class Sync::Map(K, V)
   # Stores the new value and returns the existing one if present.
   # The loaded result is true if the existing value was loaded.
   def load_and_store(key : K, value : V) : {V, Bool}
-    @mu.synchronize do
+    write_sync do
       if @hash.has_key?(key)
         old = @hash[key]
         @hash[key] = value
@@ -340,7 +348,7 @@ class Sync::Map(K, V)
   # If cancel is true, the key is not stored.
   # The loaded result is true if the value was loaded, false if computed.
   def load_or_compute(key : K, & : -> {V, Bool}) : {V, Bool}
-    @mu.synchronize do
+    write_sync do
       if @hash.has_key?(key)
         {@hash[key], true}
       else
@@ -360,7 +368,7 @@ class Sync::Map(K, V)
   # op is a ComputeOp: Update to set, Delete to remove, Cancel to do nothing.
   # Returns {actual, ok} where ok indicates the entry is present after the call.
   def compute(key : K, & : V, Bool -> {V, ComputeOp}) : {V, Bool}
-    @mu.synchronize do
+    write_sync do
       if @hash.has_key?(key)
         old = @hash[key]
         newv, op = yield(old, true)
@@ -391,7 +399,7 @@ class Sync::Map(K, V)
   # Returns the number of deleted entries.
   def delete_matching(& : K, V -> {Bool, Bool}) : Int32
     total = 0
-    @mu.synchronize do
+    write_sync do
       to_delete = [] of K
       @hash.each do |key, value|
         del, stop = yield(key, value)
@@ -408,39 +416,39 @@ class Sync::Map(K, V)
 
   # Returns value or raises KeyError.
   def [](key : K) : V
-    @mu.synchronize { @hash[key] }
+    read_sync { @hash[key] }
   end
 
   # Returns value or nil.
   def []?(key : K) : V?
-    @mu.synchronize { @hash[key]? }
+    read_sync { @hash[key]? }
   end
 
   # Stores a value.
   def []=(key : K, value : V) : V
-    @mu.synchronize { @hash[key] = value }
+    write_sync { @hash[key] = value }
   end
 
   # Returns value for key or the given default.
   def fetch(key : K, default : V) : V
-    @mu.synchronize { @hash.fetch(key, default) }
+    read_sync { @hash.fetch(key, default) }
   end
 
   # Returns value for key or yields the key to the block if absent.
   def fetch(key : K, & : K -> V) : V
-    @mu.synchronize { @hash.fetch(key) { |k| yield k } }
+    read_sync { @hash.fetch(key) { |k| yield k } }
   end
 
   # Updates the existing value for key via the block. Raises KeyError if absent.
   def update(key : K, & : V -> V) : V
-    @mu.synchronize do
+    write_sync do
       @hash[key] = yield @hash[key]
     end
   end
 
   # Traverses nested structures using #dig on each level. Raises on missing key.
   def dig(key : K, *subkeys)
-    @mu.synchronize do
+    read_sync do
       if (value = @hash[key]) && value.responds_to?(:dig)
         value.dig(*subkeys)
       else
@@ -451,12 +459,12 @@ class Sync::Map(K, V)
 
   # Returns the value at key. Raises on missing key.
   def dig(key : K)
-    @mu.synchronize { @hash[key] }
+    read_sync { @hash[key] }
   end
 
   # Traverses nested structures using #dig? on each level. Returns nil on miss.
   def dig?(key : K, *subkeys)
-    @mu.synchronize do
+    read_sync do
       if (value = @hash[key]?) && value.responds_to?(:dig?)
         value.dig?(*subkeys)
       end
@@ -465,7 +473,7 @@ class Sync::Map(K, V)
 
   # Returns the value at key or nil.
   def dig?(key : K)
-    @mu.synchronize { @hash[key]? }
+    read_sync { @hash[key]? }
   end
 
   # Unsafe store (no locking) for internal use during locked operations.
@@ -478,19 +486,19 @@ class Sync::Map(K, V)
   # Iterates all keys.
   # Removes entries for which the block returns false.
   def select!(& : K, V -> _) : self
-    @mu.synchronize { @hash.select! { |k, v| yield(k, v) } }
+    write_sync { @hash.select! { |k, v| yield(k, v) } }
     self
   end
 
   # Removes entries for which the block returns true.
   def reject!(& : K, V -> _) : self
-    @mu.synchronize { @hash.reject! { |k, v| yield(k, v) } }
+    write_sync { @hash.reject! { |k, v| yield(k, v) } }
     self
   end
 
   # Returns a new map with transformed keys.
   def transform_keys(& : K, V -> K) : Sync::Map(K, V)
-    @mu.synchronize do
+    read_sync do
       copy = Sync::Map(K, V).new
       @hash.each do |k, v|
         copy.unsafe_store(yield(k, v), v)
@@ -501,7 +509,7 @@ class Sync::Map(K, V)
 
   # Returns a new map with transformed values.
   def transform_values(& : V, K -> V) : Sync::Map(K, V)
-    @mu.synchronize do
+    read_sync do
       copy = Sync::Map(K, V).new
       @hash.each do |k, v|
         copy.unsafe_store(k, yield(v, k))
@@ -513,7 +521,7 @@ class Sync::Map(K, V)
   # Returns a new map containing entries from self and other.
   # Entries from other overwrite self's entries for duplicate keys.
   def merge(other : Hash(K, V)) : Sync::Map(K, V)
-    @mu.synchronize do
+    read_sync do
       copy = Sync::Map(K, V).new
       @hash.each { |k, v| copy.unsafe_store(k, v) }
       other.each { |k, v| copy.unsafe_store(k, v) }
@@ -523,7 +531,7 @@ class Sync::Map(K, V)
 
   # Returns a new map without nil values.
   def compact : Sync::Map(K, V)
-    @mu.synchronize do
+    read_sync do
       copy = Sync::Map(K, V).new
       @hash.each do |k, v|
         copy.unsafe_store(k, v) unless v.nil?
@@ -534,20 +542,20 @@ class Sync::Map(K, V)
 
   # Removes nil values in place.
   def compact! : self
-    @mu.synchronize { @hash.compact! }
+    write_sync { @hash.compact! }
     self
   end
 
   # Returns an Array of {K, V} tuples.
   def to_a : Array({K, V})
-    @mu.synchronize { @hash.to_a }
+    read_sync { @hash.to_a }
   end
 
   # --- More Crystal Hash parity 2 ---
 
   # Returns a new map containing only the given keys.
   def select(keys : Enumerable(K)) : Sync::Map(K, V)
-    @mu.synchronize do
+    read_sync do
       copy = Sync::Map(K, V).new
       keys.each do |k|
         copy.unsafe_store(k, @hash[k]) if @hash.has_key?(k)
@@ -559,7 +567,7 @@ class Sync::Map(K, V)
   # Returns a new map containing only the given keys (varargs).
   def select(*keys : K) : Sync::Map(K, V)
     keys_set = keys.to_set
-    @mu.synchronize do
+    read_sync do
       copy = Sync::Map(K, V).new
       @hash.each do |k, v|
         copy.unsafe_store(k, v) if keys_set.includes?(k)
@@ -570,7 +578,7 @@ class Sync::Map(K, V)
 
   # Returns a new map excluding the given keys.
   def reject(keys : Enumerable(K)) : Sync::Map(K, V)
-    @mu.synchronize do
+    read_sync do
       copy = Sync::Map(K, V).new
       @hash.each do |k, v|
         copy.unsafe_store(k, v) unless keys.any? { |reject_key| reject_key == k }
@@ -582,7 +590,7 @@ class Sync::Map(K, V)
   # Returns a new map excluding the given keys (varargs).
   def reject(*keys : K) : Sync::Map(K, V)
     keys_set = keys.to_set
-    @mu.synchronize do
+    read_sync do
       copy = Sync::Map(K, V).new
       @hash.each do |k, v|
         copy.unsafe_store(k, v) unless keys_set.includes?(k)
@@ -594,7 +602,7 @@ class Sync::Map(K, V)
   # Returns a new map with entries from self and other.
   # The block resolves conflicts: |key, old_val, new_val| -> resolved_val.
   def merge(other : Hash(K, V), & : K, V, V -> V) : Sync::Map(K, V)
-    @mu.synchronize do
+    read_sync do
       copy = Sync::Map(K, V).new
       @hash.each { |k, v| copy.unsafe_store(k, v) }
       other.each do |k, v|
@@ -610,7 +618,7 @@ class Sync::Map(K, V)
 
   # Merges entries from other into self, with optional conflict resolution.
   def merge!(other : Hash(K, V), & : K, V, V -> V) : self
-    @mu.synchronize do
+    write_sync do
       other.each do |k, v|
         if @hash.has_key?(k)
           @hash[k] = yield(k, @hash[k], v)
@@ -624,7 +632,7 @@ class Sync::Map(K, V)
 
   # Transforms keys in place.
   def transform_keys!(& : K, V -> K) : self
-    @mu.synchronize do
+    write_sync do
       new_entries = @hash.map { |k, v| {yield(k, v), v} }
       @hash.clear
       new_entries.each { |k, v| @hash[k] = v }
@@ -634,7 +642,7 @@ class Sync::Map(K, V)
 
   # Transforms values in place.
   def transform_values!(& : V, K -> V) : self
-    @mu.synchronize do
+    write_sync do
       @hash.each do |k, v|
         @hash[k] = yield(v, k)
       end
@@ -644,7 +652,7 @@ class Sync::Map(K, V)
 
   # Returns a new map with keys and values swapped.
   def invert : Sync::Map(V, K)
-    @mu.synchronize do
+    read_sync do
       copy = Sync::Map(V, K).new
       @hash.each do |k, v|
         if copy.has_key?(v)
@@ -658,12 +666,12 @@ class Sync::Map(K, V)
 
   # Returns an array of values for the given keys. Raises KeyError on missing key.
   def values_at(*keys : K) : Array(V)
-    @mu.synchronize { keys.map { |k| @hash[k] }.to_a }
+    read_sync { keys.map { |k| @hash[k] }.to_a }
   end
 
   # Returns a deep copy (clones values too).
   def clone : Sync::Map(K, V)
-    @mu.synchronize do
+    read_sync do
       copy = Sync::Map(K, V).new
       @hash.each do |k, v|
         copy.unsafe_store(k, v.clone)
@@ -674,7 +682,7 @@ class Sync::Map(K, V)
 
   # Returns the underlying Hash representation (snapshot).
   def to_h : Hash(K, V)
-    @mu.synchronize { @hash.dup }
+    read_sync { @hash.dup }
   end
 
   # Unsafe fetch (no locking) for internal use during locked operations.
@@ -695,7 +703,7 @@ class Sync::Map(K, V)
 
   # Returns statistics about the map. O(N) operation, for diagnostics only.
   def stats : Stats
-    @mu.synchronize do
+    read_sync do
       Stats.new(@hash.size, @hash.size) # capacity = size for simple hash
     end
   end
@@ -704,19 +712,19 @@ class Sync::Map(K, V)
 
   # Yields each key-value pair as {K, V} tuple (Enumerable contract).
   def each(& : {K, V} -> _) : Nil
-    snapshot = @mu.synchronize { @hash.to_a }
+    snapshot = read_sync { @hash.to_a }
     snapshot.each { |pair| yield pair }
   end
 
   # Without block, returns a snapshot iterator.
   def each : Iterator({K, V})
-    entries = @mu.synchronize { @hash.to_a }
+    entries = read_sync { @hash.to_a }
     entries.each
   end
 
   # Go sync.Map Range semantics: iterates entries, stops when block returns falsey.
   def range(& : K, V -> _) : Nil
-    snapshot = @mu.synchronize { @hash.to_a }
+    snapshot = read_sync { @hash.to_a }
     snapshot.each do |key, value|
       break unless yield(key, value)
     end
@@ -724,25 +732,25 @@ class Sync::Map(K, V)
 
   # Iterates all keys (snapshot-based).
   def each_key(& : K -> _) : Nil
-    snapshot = @mu.synchronize { @hash.keys }
+    snapshot = read_sync { @hash.keys }
     snapshot.each { |k| yield k }
   end
 
   # Without block, returns an iterator over snapshot keys.
   def each_key : Iterator(K)
-    keys = @mu.synchronize { @hash.keys }
+    keys = read_sync { @hash.keys }
     keys.each
   end
 
   # Iterates all values (snapshot-based).
   def each_value(& : V -> _) : Nil
-    snapshot = @mu.synchronize { @hash.values }
+    snapshot = read_sync { @hash.values }
     snapshot.each { |v| yield v }
   end
 
   # Without block, returns an iterator over snapshot values.
   def each_value : Iterator(V)
-    vals = @mu.synchronize { @hash.values }
+    vals = read_sync { @hash.values }
     vals.each
   end
 
@@ -751,14 +759,14 @@ class Sync::Map(K, V)
   # Removes all entries except those with the given keys.
   def select!(*keys : K) : self
     keys_set = keys.to_set
-    @mu.synchronize { @hash.select! { |k, _v| keys_set.includes?(k) } }
+    write_sync { @hash.select! { |k, _v| keys_set.includes?(k) } }
     self
   end
 
   # Removes entries with the given keys.
   def reject!(*keys : K) : self
     keys_set = keys.to_set
-    @mu.synchronize { @hash.reject! { |k, _v| keys_set.includes?(k) } }
+    write_sync { @hash.reject! { |k, _v| keys_set.includes?(k) } }
     self
   end
 end

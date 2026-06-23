@@ -11,7 +11,8 @@
 
 - All public methods must be MT-safe
 - Use `Sync::Mutex(:unchecked)` for lowest overhead
-- Iteration methods that yield to caller must snapshot (lock → copy → release → yield)
+- Iteration methods that yield to caller must snapshot
+  (lock → copy → release → yield)
 - Methods that execute user blocks under the lock must document the reentrancy risk
 
 ## Naming

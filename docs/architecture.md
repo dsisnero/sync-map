@@ -9,8 +9,19 @@ to wrapping a `Hash(K, V)` with a `Mutex`.
 ## Backing Store
 
 - **Primary**: `Hash(K, V)` — Crystal's stdlib hash table
-- **Lock**: `Sync::Mutex(type: :unchecked)` — nsync-style mutex with CAS-based
-  fast path, no deadlock detection overhead
+- **Lock**: `Sync::RWLock(:unchecked)` — read-only operations take a reader
+  lock and proceed concurrently; mutations take the writer lock
+
+## Backends
+
+Three concurrent-map implementations share the same contract:
+
+- `Sync::Map` (default) — `RWLock` + `Hash`, broadest API surface
+- `Sync::HashTrieMap` — lock-free reads over a hash trie
+- `Sync::XMap` — CLHT (cache-line hash table), best raw throughput
+
+See [benchmarks](../benchmarks/benchmarks.md) for measured throughput and
+backend selection guidance.
 
 ## API Layers
 
@@ -24,9 +35,9 @@ to wrapping a `Hash(K, V)` with a `Mutex`.
    `transform_values`, `compact`, `compact!`, `invert`, `dig`, `dig?`,
    `each_key`, `each_value`, `values_at`, `first_key`, `last_key`, `first_value`,
    `last_value`, `to_a`, `to_h`
-4. **Enumerable inclusion** — `each` yields `{K, V}` tuples for `Enumerable({K, V})`,
-   providing `map`, `reduce`, `find`, `all?`, `any?`, `count`, `sum`, `min`,
-   `max`, `group_by`, `partition`, and more for free
+4. **Enumerable inclusion** — `each` yields `{K, V}` tuples for
+   `Enumerable({K, V})`, providing `map`, `reduce`, `find`, `all?`, `any?`,
+   `count`, `sum`, `min`, `max`, `group_by`, `partition`, and more for free
 
 ## Thread Safety
 
@@ -39,6 +50,7 @@ to wrapping a `Hash(K, V)` with a `Mutex`.
 ## Iteration Strategy
 
 SNAPSHOT methods (each, each_key, each_value, range):
+
 1. Acquire lock
 2. Copy all entries/keys/values to an array
 3. Release lock

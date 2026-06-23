@@ -18,3 +18,7 @@ temp/
 # Local agent/tool settings
 .claude/
 .lattice-cache/
+
+# macOS metadata (AppleDouble + Finder)
+._*
+.DS_Store
