@@ -91,6 +91,10 @@ class Sync::XMap(K, V)
       @slots[idx].get(:acquire)
     end
 
+    def load_slot_unsafe(idx : Int32) : Pointer(Void)
+      @slots.to_unsafe[idx].get(:acquire)
+    end
+
     def store_slot(idx : Int32, ptr : Pointer(Void))
       @slots[idx] = Atomic(Pointer(Void)).new(ptr)
     end
@@ -138,21 +142,19 @@ class Sync::XMap(K, V)
     @table.get(:acquire).as(Table(K, V))
   end
 
-  private def hash(key : K) : UInt64
-    key.hash.to_u64
-  end
-
-  private def hash_with_seed(key : K) : UInt64
-    hash(key) ^ @seed
+  @[AlwaysInline]
+  private def h(key : K) : UInt64
+    key.hash.to_u64 ^ @seed
   end
 
   # --- Public API ---
 
   def load(key : K) : {V?, Bool}
-    h = hash_with_seed(key)
+    h = h(key)
+    table = current_table
     table = current_table
     bidx = (Sync::XMap.h1(h) & (table.buckets.size - 1)).to_i
-    b = table.buckets[bidx]
+    b = table.buckets.to_unsafe[bidx]
     h2w = Sync::XMap.broadcast(Sync::XMap.h2(h))
 
     loop do
@@ -176,7 +178,7 @@ class Sync::XMap(K, V)
   end
 
   def store(key : K, value : V) : Nil
-    h = hash_with_seed(key)
+    h = h(key)
     @resize_rw.read {
       do_store(current_table, key, value, h)
     }
@@ -188,7 +190,7 @@ class Sync::XMap(K, V)
   end
 
   def load_and_delete(key : K) : {V?, Bool}
-    h = hash_with_seed(key)
+    h = h(key)
     @resize_rw.read {
       do_load_and_delete(current_table, key, h)
     }
@@ -261,7 +263,7 @@ class Sync::XMap(K, V)
             eptr = b.load_slot(idx)
             next if eptr.address == 0
             e = eptr.as(Entry(K, V))
-            h_new = hash_with_seed(e.key)
+            h_new = h(e.key)
             insert_into_table(new_table, h_new, e.key, e.value)
           end
           b = b.next_bucket
