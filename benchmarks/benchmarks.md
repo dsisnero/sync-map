@@ -259,13 +259,16 @@ maximum throughput at any scale, `Sync::XMap` is the champion.
 
 ## Using a Backend
 
-All three backends implement the same core contract; pick one by requiring
-it. Only `Sync::Map` adds the full Crystal `Hash` surface and `Enumerable`.
+All three backends implement the same core contract and Hash sugar;
+pick one.  `Sync::XMap` is the recommended default for maximum
+throughput.
 
 ```crystal
-require "sync-map"               # Sync::Map (default)
-require "sync-map/hash_trie_map" # Sync::HashTrieMap
-require "sync-map/xmap"          # Sync::XMap
+require "sync-map"               # provides all three backends
+
+a = Sync::Map(String, Int32).new          # full Hash + Enumerable
+b = Sync::HashTrieMap(String, Int32).new   # small, read-hot
+c = Sync::XMap(String, Int32).new          # ❦ recommended default
 
 a = Sync::Map(String, Int32).new
 b = Sync::HashTrieMap(String, Int32).new

@@ -1,4 +1,6 @@
 require "sync/rw_lock"
+require "./sync-map/hash_trie_map"
+require "./sync-map/xmap"
 
 # A thread-safe map (Hash) that is safe for concurrent use
 # by multiple fibers without additional locking or coordination.
@@ -8,6 +10,16 @@ require "sync/rw_lock"
 # Uses Sync::RWLock(:unchecked) so read-only operations can proceed concurrently
 # while writes stay exclusive. Safe because Sync::Map never upgrades locks and
 # always properly pairs read/write lock and unlock operations.
+#
+# ## Choosing a backend
+#
+# Three backends share the same core contract and Hash sugar.
+# All are available from `require "sync-map"`.
+#
+# - `Sync::Map` — full `Crystal::Hash` + `Enumerable` API, robust at any scale.
+# - `Sync::XMap` — highest throughput across all sizes (31-43 M ops/s),
+#   200x faster at 100k entries.  **Recommended default.**
+# - `Sync::HashTrieMap` — fastest at small maps (≤ 1k, read-mostly).
 #
 # Upstream sources:
 # - Go stdlib sync.Map: vendor/go/src/sync/map.go (Go 1.24+, HashTrieMap-backed)

@@ -31,14 +31,15 @@ All public methods are MT-safe, verified with
 
 2. Run `shards install`
 
-## Usage
+ ## Usage
 
 ```crystal
 require "sync-map"
 
-map = Sync::Map(String, Int32).new
+# XMap — recommended default, highest throughput at all sizes
+map = Sync::XMap(String, Int32).new
 
-# Crystal Hash-style access
+# Crystal Hash-style access (all backends support these)
 map["a"] = 1
 map["b"]?            # => 2 or nil
 
@@ -60,12 +61,13 @@ end
 
 ## Choosing a backend
 
-Three backends share the same concurrent-map contract:
+Three backends share the same concurrent-map contract and Hash sugar.
+All are available from `require "sync-map"`.
 
 ```crystal
-require "sync-map"               # Sync::Map (default)
-require "sync-map/hash_trie_map" # Sync::HashTrieMap
-require "sync-map/xmap"          # Sync::XMap
+map_a = Sync::Map(String, Int32).new          # full Hash + Enumerable API
+map_b = Sync::HashTrieMap(String, Int32).new   # small, read-hot
+map_c = Sync::XMap(String, Int32).new          # ❦ recommended default
 ```
 
 | Workload | Recommended backend |
