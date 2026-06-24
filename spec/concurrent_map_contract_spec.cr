@@ -160,6 +160,13 @@ macro shared_hash_sugar(name, type)
       m[1] = 99
       m[1].should eq(99)
     end
+
+    it "[] raises KeyError on missing key" do
+      m = {{type}}.new
+      expect_raises(KeyError, "Missing hash key: 1") do
+        m[1]
+      end
+    end
   end
 end
 

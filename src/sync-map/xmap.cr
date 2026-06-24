@@ -381,9 +381,10 @@ class Sync::XMap(K, V)
     end
   end
 
-  def [](key : K) : V?
-    v, _ = load(key)
-    v
+  def [](key : K) : V
+    v, ok = load(key)
+    raise KeyError.new("Missing hash key: #{key.inspect}") unless ok
+    v.not_nil!
   end
 
   def []?(key : K) : V?

@@ -255,9 +255,10 @@ class Sync::HashTrieMap(K, V)
     count = 0; each { |_, _| count += 1 }; count
   end
 
-  def [](key : K) : V?
-    v, _ = load(key)
-    v
+  def [](key : K) : V
+    v, ok = load(key)
+    raise KeyError.new("Missing hash key: #{key.inspect}") unless ok
+    v.not_nil!
   end
 
   def []?(key : K) : V?
