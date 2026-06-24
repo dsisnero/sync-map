@@ -106,3 +106,63 @@ end
 shared_contract "Sync::Map shared contract", Sync::Map(Int32, Int32)
 shared_contract "Sync::HashTrieMap shared contract", Sync::HashTrieMap(Int32, Int32)
 shared_contract "Sync::XMap shared contract", Sync::XMap(Int32, Int32)
+
+macro shared_hash_sugar(name, type)
+  describe {{name}} do
+    it "[]= and []" do
+      m = {{type}}.new
+      m[1] = 10
+      m[2] = 20
+      m[1].should eq(10)
+      m[2].should eq(20)
+    end
+
+    it "[]? returns nil for missing key" do
+      m = {{type}}.new
+      m[1] = 10
+      m[1]?.should eq(10)
+      m[2]?.should be_nil
+    end
+
+    it "has_key?" do
+      m = {{type}}.new
+      m[1] = 10
+      m.has_key?(1).should be_true
+      m.has_key?(2).should be_false
+    end
+
+    it "keys" do
+      m = {{type}}.new
+      m[1] = 10
+      m[2] = 20
+      ks = m.keys.sort
+      ks.should eq([1, 2])
+    end
+
+    it "values" do
+      m = {{type}}.new
+      m[1] = 10
+      m[2] = 20
+      vs = m.values.sort
+      vs.should eq([10, 20])
+    end
+
+    it "empty?" do
+      m = {{type}}.new
+      m.empty?.should be_true
+      m[1] = 10
+      m.empty?.should be_false
+    end
+
+    it "overwrites with []=" do
+      m = {{type}}.new
+      m[1] = 10
+      m[1] = 99
+      m[1].should eq(99)
+    end
+  end
+end
+
+shared_hash_sugar "Sync::Map hash sugar", Sync::Map(Int32, Int32)
+shared_hash_sugar "Sync::HashTrieMap hash sugar", Sync::HashTrieMap(Int32, Int32)
+shared_hash_sugar "Sync::XMap hash sugar", Sync::XMap(Int32, Int32)

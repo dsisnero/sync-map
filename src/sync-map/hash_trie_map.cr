@@ -254,4 +254,40 @@ class Sync::HashTrieMap(K, V)
   def size : Int32
     count = 0; each { |_, _| count += 1 }; count
   end
+
+  def [](key : K) : V?
+    v, _ = load(key)
+    v
+  end
+
+  def []?(key : K) : V?
+    v, ok = load(key)
+    ok ? v : nil
+  end
+
+  def []=(key : K, value : V) : V
+    store(key, value)
+    value
+  end
+
+  def has_key?(key : K) : Bool
+    _, ok = load(key)
+    ok
+  end
+
+  def keys : Array(K)
+    a = [] of K
+    each { |k, _| a << k }
+    a
+  end
+
+  def values : Array(V)
+    a = [] of V
+    each { |_, v| a << v }
+    a
+  end
+
+  def empty? : Bool
+    size == 0
+  end
 end

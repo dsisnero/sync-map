@@ -380,4 +380,40 @@ class Sync::XMap(K, V)
       b = nb
     end
   end
+
+  def [](key : K) : V?
+    v, _ = load(key)
+    v
+  end
+
+  def []?(key : K) : V?
+    v, ok = load(key)
+    ok ? v : nil
+  end
+
+  def []=(key : K, value : V) : V
+    store(key, value)
+    value
+  end
+
+  def has_key?(key : K) : Bool
+    _, ok = load(key)
+    ok
+  end
+
+  def keys : Array(K)
+    a = [] of K
+    each { |k, _| a << k }
+    a
+  end
+
+  def values : Array(V)
+    a = [] of V
+    each { |_, v| a << v }
+    a
+  end
+
+  def empty? : Bool
+    size == 0
+  end
 end
