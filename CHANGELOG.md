@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-06-23
+
+### Added
+
+- Hash-style sugar methods (`[]`, `[]=`, `[]?`, `has_key?`, `keys`,
+  `values`, `empty?`) added to `Sync::HashTrieMap` and `Sync::XMap`,
+  giving all three backends identical Crystal `Hash` ergonomics.
+- Shared contract spec verifying Hash-sugar parity across all backends
+  (21 new specs, 212 total).
+
+### Changed
+
+- Benchmark harness now uses `[]` and `[]=` sugar methods instead of
+  `load`/`store`, demonstrating identical throughput.
+
 ## [0.1.3] - 2026-06-23
 
 ### Added
@@ -79,7 +94,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   execution context has capacity 1, so the previous plain-`spawn` MT
   numbers reflected concurrency, not parallelism.
 
-[Unreleased]: https://github.com/dsisnero/sync-map/compare/v0.1.3...HEAD
+[Unreleased]: https://github.com/dsisnero/sync-map/compare/v0.1.4...HEAD
+[0.1.4]: https://github.com/dsisnero/sync-map/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/dsisnero/sync-map/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/dsisnero/sync-map/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/dsisnero/sync-map/releases/tag/v0.1.1

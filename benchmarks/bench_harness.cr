@@ -52,8 +52,8 @@ def measure_reads(map, iters, workers) : Int64
   if workers <= 1
     sink = 0_i64
     iters.times do |i|
-      _, ok = map.load(KEYS[i % SIZE])
-      sink &+= 1 if ok
+      v = map[KEYS[i % SIZE]]
+      sink &+= 1 if v
     end
     return sink
   end
@@ -69,8 +69,8 @@ def measure_reads(map, iters, workers) : Int64
     bench_spawn do
       local = 0_i64
       local_iters.times do |i|
-        _, ok = map.load(KEYS[((offset + i) % SIZE)])
-        local &+= 1 if ok
+        v = map[KEYS[((offset + i) % SIZE)]]
+        local &+= 1 if v
       end
       total.add(local)
       wg.done
@@ -89,10 +89,10 @@ def measure_mixed(map, iters, workers) : Int64
     iters.times do |i|
       key = KEYS[i % SIZE]
       if (i & 7) == 0
-        map.store(key, i)
+        map[key] = i
       else
-        _, ok = map.load(key)
-        sink &+= 1 if ok
+        v = map[key]
+        sink &+= 1 if v
       end
     end
     return sink
@@ -112,10 +112,10 @@ def measure_mixed(map, iters, workers) : Int64
         absolute_i = offset + i
         key = KEYS[absolute_i % SIZE]
         if (absolute_i & 7) == 0
-          map.store(key, absolute_i)
+          map[key] = absolute_i
         else
-          _, ok = map.load(key)
-          local &+= 1 if ok
+          v = map[key]
+          local &+= 1 if v
         end
       end
       total.add(local)
@@ -144,7 +144,7 @@ end
 
 def bench(label, map, iters, runs, workers, mode)
   # Pre-fill outside timing
-  SIZE.times { |i| map.store(KEYS[i], i) }
+  SIZE.times { |i| map[KEYS[i]] = i }
   expected = mode == "read" ? iters.to_i64 : expected_sink(iters.to_i64)
 
   times = [] of Float64
